@@ -1,3 +1,30 @@
+diff --git a/css/dropzone.element.css b/css/dropzone.element.css
+new file mode 100644
+index 0000000..587d0c3
+--- /dev/null
++++ b/css/dropzone.element.css
+@@ -0,0 +1,21 @@
++.dropzone .file_metadata_label {
++    margin-top: 0.25rem;
++}
++
++.dropzone .file_metadata_input {
++    display: block;
++    cursor: text;
++}
++
++.dropzone .file_metadata_action {
++    display: inline-block;
++    margin-top: 0.25rem;
++    cursor: pointer;
++}
++
++.dropzone .file_metadata_save_notification {
++    display: inline-block;
++    margin-left: 0.5rem;
++    color: green;
++    font-weight: bold;
++}
 diff --git a/dropzonejs.libraries.yml b/dropzonejs.libraries.yml
 index a73667e..cc6d9a2 100644
 --- a/dropzonejs.libraries.yml
@@ -217,7 +244,7 @@ index 1b4b49b..04445e1 100644
    }
  
 diff --git a/src/Element/DropzoneJs.php b/src/Element/DropzoneJs.php
-index 11aedb1..8195c45 100644
+index 11aedb1..45256ae 100644
 --- a/src/Element/DropzoneJs.php
 +++ b/src/Element/DropzoneJs.php
 @@ -48,6 +48,10 @@ use Drupal\Core\Url;
@@ -257,10 +284,10 @@ index 11aedb1..8195c45 100644
            'dictDefaultMessage' => Html::escape($element['#dropzone_description']),
            'acceptedFiles' => '.' . str_replace(' ', ',.', self::getValidExtensions($element)),
            'maxFiles' => $element['#max_files'],
-+          'showAlt' => !empty($element['#show_alt']) ? $element['#show_alt'] : FALSE,
-+          'showTitle' => !empty($element['#show_title']) ? $element['#show_title'] : FALSE,
 +          'min_resolution_x' => isset($element['#min_resolution_x']) ? $element['#min_resolution_x'] : FALSE,
 +          'min_resolution_y' => isset($element['#min_resolution_y']) ? $element['#min_resolution_y'] : FALSE,
++          'showAlt' => !empty($element['#show_alt']) ? $element['#show_alt'] : FALSE,
++          'showTitle' => !empty($element['#show_title']) ? $element['#show_title'] : FALSE,
          ],
        ],
      ];
