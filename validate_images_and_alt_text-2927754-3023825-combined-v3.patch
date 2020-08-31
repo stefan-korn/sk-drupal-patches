@@ -1,0 +1,348 @@
+diff --git a/css/dropzone.element.css b/css/dropzone.element.css
+new file mode 100644
+index 0000000..587d0c3
+--- /dev/null
++++ b/css/dropzone.element.css
+@@ -0,0 +1,21 @@
++.dropzone .file_metadata_label {
++    margin-top: 0.25rem;
++}
++
++.dropzone .file_metadata_input {
++    display: block;
++    cursor: text;
++}
++
++.dropzone .file_metadata_action {
++    display: inline-block;
++    margin-top: 0.25rem;
++    cursor: pointer;
++}
++
++.dropzone .file_metadata_save_notification {
++    display: inline-block;
++    margin-left: 0.5rem;
++    color: green;
++    font-weight: bold;
++}
+diff --git a/dropzonejs.libraries.yml b/dropzonejs.libraries.yml
+index a73667e..cc6d9a2 100644
+--- a/dropzonejs.libraries.yml
++++ b/dropzonejs.libraries.yml
+@@ -18,6 +18,9 @@ widget:
+       css/dropzone.widget.css: {}
+ integration:
+   version: VERSION
++  css:
++    theme:
++      css/dropzone.element.css: {}
+   js:
+     js/dropzone.integration.js: {}
+   dependencies:
+diff --git a/js/dropzone.integration.js b/js/dropzone.integration.js
+index 14b1bd0..5aac4d5 100644
+--- a/js/dropzone.integration.js
++++ b/js/dropzone.integration.js
+@@ -29,6 +29,16 @@
+         };
+         var instanceConfig = drupalSettings.dropzonejs.instances[selector.attr('id')];
+ 
++        // Mininum resolution check, based on example from https://gitlab.com/meno/dropzone/-/wikis/FAQ#reject-images-based-on-image-dimensions
++        var minResConfig = {};
++        if (instanceConfig.min_resolution_x) {
++          minResConfig = {
++            accept: function(file, done) {
++              file.acceptDimensions = done;
++              file.rejectDimensions = function(dimensions) { done(Drupal.t("Invalid dimension. Minimum dimension: ")+dimensions);};
++            }
++          }
++        }
+         // If DropzoneJS instance is already registered on Element. There is no
+         // need to register it again.
+         if (selector.once('register-dropzonejs').length !== selector.length) {
+@@ -42,7 +52,7 @@
+         }
+ 
+         // Initialize DropzoneJS instance for element.
+-        var dropzoneInstance = new Dropzone('#' + selector.attr('id'), $.extend({}, instanceConfig, config));
++        var dropzoneInstance = new Dropzone('#' + selector.attr('id'), $.extend({}, instanceConfig, config, minResConfig));
+ 
+         // Other modules might need instances.
+         drupalSettings['dropzonejs']['instances'][selector.attr('id')]['instance'] = dropzoneInstance;
+@@ -55,11 +65,69 @@
+           });
+         });
+ 
++        function processMetadata(file, uploadedFilesElement, id) {
++          var uploadedFilesValue =  uploadedFilesElement.attr('value');
++          var initial_fragment = uploadedFilesValue.slice(0,uploadedFilesValue.lastIndexOf(file.processedName));
++          var metadata_fragment = '';
++          var alt_input = jQuery('#alt_value_' + id);
++          var title_input = jQuery('#title_value_' + id);
++          var final_fragment = uploadedFilesValue.slice(uploadedFilesValue.lastIndexOf(file.processedName) + file.processedName.length, uploadedFilesValue.length);
++          var notification_element = jQuery('#upload_notification_' + id);
++
++          final_fragment = final_fragment.slice(final_fragment.indexOf(';'), uploadedFilesValue.length);
++          if (alt_input.length && alt_input.val()) {
++            metadata_fragment += '[ALT=' + alt_input.val() + ']';
++          }
++          if (title_input.length && title_input.val()) {
++            metadata_fragment += '[TITLE=' + title_input.val() + ']';
++          }
++          uploadedFilesElement.attr('value', initial_fragment + file.processedName + metadata_fragment + final_fragment);
++          if (notification_element.length) {
++            notification_element.show();
++          }
++        }
++
++        function unsetSaveNotification(id) {
++          var notification_element = jQuery('#upload_notification_' + id);
++
++          if (notification_element.length) {
++            notification_element.hide();
++          }
++        }
++
+         // React on add file. Add only accepted files.
+         dropzoneInstance.on('success', function (file, response) {
+           var uploadedFilesElement = selector.siblings(':hidden');
+           var currentValue = uploadedFilesElement.attr('value') || '';
+ 
++          if (instanceConfig.showAlt) {
++            file._altTextLabel = Dropzone.createElement('<label class="file_metadata_label file_alt_label">' + Drupal.t('Alt') + '</label>');
++            file._altText = Dropzone.createElement('<input type="text" class="file_metadata_input file_alt_input" id="alt_value_' + file.upload.uuid + '"/>');
++            file.previewElement.appendChild(file._altTextLabel);
++            file.previewElement.appendChild(file._altText);
++            $(file._altText).on('keyup change', function () {
++              unsetSaveNotification(file.upload.uuid);
++            });
++          }
++          if (instanceConfig.showTitle) {
++            file._titleTextLabel = Dropzone.createElement('<label class="file_metadata_label file_title_label">' + Drupal.t('Title') + '</label>');
++            file._titleText = Dropzone.createElement('<input type="text" class="file_metadata_input file_title_input" id="title_value_' + file.upload.uuid + '"/>');
++            file.previewElement.appendChild(file._titleTextLabel);
++            file.previewElement.appendChild(file._titleText);
++            $(file._titleText).on('keyup change', function () {
++              unsetSaveNotification(file.upload.uuid);
++            });
++          }
++          if (instanceConfig.showAlt || instanceConfig.showTitle) {
++            file._metadataSave = Dropzone.createElement('<input type="button" value="' + Drupal.t('Save metadata') + '" class="file_metadata_action file_metadata_save">');
++            file._metadataSaveNotification = Dropzone.createElement('<span id="upload_notification_' + file.upload.uuid + '" class="file_metadata_notification file_metadata_save_notification" style="display: none">' + Drupal.t('Saved') + '</span>');
++            file.previewElement.appendChild(file._metadataSave);
++            file.previewElement.appendChild(file._metadataSaveNotification);
++            $(file._metadataSave).on('click', function () {
++              processMetadata(file, uploadedFilesElement, file.upload.uuid);
++            });
++          }
++
+           // The file is transliterated on upload. The element has to reflect
+           // the real filename.
+           file.processedName = response.result;
+@@ -94,6 +162,28 @@
+             dropzoneInstance.removeFile(rejectedFiles[i]);
+           }
+         });
++        // Rebuild Drupal core's minimum image resolution validation, as this
++        // does not get called in dropzone entity browser widgets
++        dropzoneInstance.on("thumbnail", function (file) {
++          var dimensions;
++          if (instanceConfig.min_resolution_x) {
++            dimensions = Drupal.t('width')+': '+instanceConfig.min_resolution_x+"px";
++            if (instanceConfig.min_resolution_y) {
++              dimensions = dimensions + ", "
++            }
++          }
++          if (instanceConfig.min_resolution_y) {
++            dimensions = dimensions + Drupal.t('height')+': '+instanceConfig.min_resolution_y+"px";
++          }
++          if ((instanceConfig.min_resolution_x && file.width < instanceConfig.min_resolution_x) || (instanceConfig.min_resolution_y) && file.height < instanceConfig.min_resolution_y) {
++            file.rejectDimensions(dimensions);
++          }
++          else {
++            if (typeof file.acceptDimensions !== "undefined") {
++              file.acceptDimensions();
++            }
++          }
++        });
+       });
+     }
+   };
+diff --git a/modules/eb_widget/config/schema/dropzonejs_eb_widget.schema.yml b/modules/eb_widget/config/schema/dropzonejs_eb_widget.schema.yml
+index ad564f5..1daa35e 100644
+--- a/modules/eb_widget/config/schema/dropzonejs_eb_widget.schema.yml
++++ b/modules/eb_widget/config/schema/dropzonejs_eb_widget.schema.yml
+@@ -38,6 +38,9 @@ entity_browser.browser.widget.dropzonejs:
+     thumbnail_method:
+       type: string
+       label: 'Method used for generating the thumbnail'
++    min_resolution:
++      type: string
++      label: 'Minimum image resolution'
+ 
+ entity_browser.browser.widget.dropzonejs_media_entity:
+   type: entity_browser.browser.widget.dropzonejs
+diff --git a/modules/eb_widget/src/Plugin/EntityBrowser/Widget/DropzoneJsEbWidget.php b/modules/eb_widget/src/Plugin/EntityBrowser/Widget/DropzoneJsEbWidget.php
+index 1b4b49b..04445e1 100644
+--- a/modules/eb_widget/src/Plugin/EntityBrowser/Widget/DropzoneJsEbWidget.php
++++ b/modules/eb_widget/src/Plugin/EntityBrowser/Widget/DropzoneJsEbWidget.php
+@@ -142,6 +142,7 @@ class DropzoneJsEbWidget extends WidgetBase {
+       'resize_quality' => 1,
+       'resize_method' => 'contain',
+       'thumbnail_method' => 'contain',
++      'min_resolution' => NULL,
+     ] + parent::defaultConfiguration();
+   }
+ 
+@@ -157,6 +158,7 @@ class DropzoneJsEbWidget extends WidgetBase {
+       $cardinality = $validators['cardinality']['cardinality'];
+     }
+     $config = $this->getConfiguration();
++    $min_resolution = explode('x', $config['settings']['min_resolution']) + ['', ''];
+     $form['upload'] = [
+       '#title' => $this->t('File upload'),
+       '#type' => 'dropzonejs',
+@@ -166,6 +168,8 @@ class DropzoneJsEbWidget extends WidgetBase {
+       '#extensions' => $config['settings']['extensions'],
+       '#max_files' => ($cardinality > 0) ? $cardinality : 0,
+       '#clientside_resize' => $config['settings']['clientside_resize'],
++      '#min_resolution_x' => $min_resolution[0],
++      '#min_resolution_y' => $min_resolution[1]
+     ];
+ 
+     if ($config['settings']['clientside_resize']) {
+@@ -510,6 +514,33 @@ class DropzoneJsEbWidget extends WidgetBase {
+       ]
+     ];
+ 
++    $min_resolution = explode('x', $configuration['min_resolution']) + ['', ''];
++    $form['min_resolution'] = [
++      '#type' => 'item',
++      '#title' => t('Minimum image resolution'),
++      '#element_validate' => [['Drupal\image\Plugin\Field\FieldType\ImageItem', 'validateResolution']],
++      '#weight' => 4.2,
++      '#description' => t('The minimum allowed image size expressed as WIDTH×HEIGHT (e.g. 640×480). Leave blank for no restriction. If a smaller image is uploaded, it will be rejected.'),
++    ];
++    $form['min_resolution']['x'] = [
++      '#type' => 'number',
++      '#title' => t('Minimum width'),
++      '#title_display' => 'invisible',
++      '#default_value' => $min_resolution[0],
++      '#min' => 1,
++      '#field_suffix' => ' × ',
++      '#prefix' => '<div class="form--inline clearfix">',
++    ];
++    $form['min_resolution']['y'] = [
++      '#type' => 'number',
++      '#title' => t('Minimum height'),
++      '#title_display' => 'invisible',
++      '#default_value' => $min_resolution[1],
++      '#min' => 1,
++      '#field_suffix' => ' ' . t('pixels'),
++      '#suffix' => '</div>',
++    ];
++
+     return $form;
+   }
+ 
+diff --git a/src/Element/DropzoneJs.php b/src/Element/DropzoneJs.php
+index 11aedb1..45256ae 100644
+--- a/src/Element/DropzoneJs.php
++++ b/src/Element/DropzoneJs.php
+@@ -48,6 +48,10 @@ use Drupal\Core\Url;
+  * - #thumbnail_method (string).
+  *   (optional) Accepts 'contain', which scales the image, or 'crop' which crops
+  *   the image. Defaults to 'contain'.
++ * - #show_alt (boolean).
++ *   (optional) TRUE if alt text input should be shown.
++ * - #show_title (boolean).
++ *   (optional) TRUE if title text input should be shown.
+  *
+  * @todo Not sure about the version for clientside.
+  *
+@@ -60,10 +64,20 @@ use Drupal\Core\Url;
+ class DropzoneJs extends FormElement {
+ 
+   /**
+-   * A defualut set of valid extensions.
++   * A default set of valid extensions.
+    */
+   const DEFAULT_VALID_EXTENSIONS = 'jpg jpeg gif png txt doc xls pdf ppt pps odt ods odp';
+ 
++  /**
++   * A regex pattern to match the title metadata
++   */
++  const TITLE_METADATA_REGEX = '/\\[TITLE=([^\\]]+)\\]/';
++
++  /**
++   * A regex pattern to match the alt text metadata
++   */
++  const ALT_METADATA_REGEX = '/\\[ALT=([^\\]]+)\\]/';
++
+   /**
+    * {@inheritdoc}
+    */
+@@ -138,6 +152,10 @@ class DropzoneJs extends FormElement {
+           'dictDefaultMessage' => Html::escape($element['#dropzone_description']),
+           'acceptedFiles' => '.' . str_replace(' ', ',.', self::getValidExtensions($element)),
+           'maxFiles' => $element['#max_files'],
++          'min_resolution_x' => isset($element['#min_resolution_x']) ? $element['#min_resolution_x'] : FALSE,
++          'min_resolution_y' => isset($element['#min_resolution_y']) ? $element['#min_resolution_y'] : FALSE,
++          'showAlt' => !empty($element['#show_alt']) ? $element['#show_alt'] : FALSE,
++          'showTitle' => !empty($element['#show_title']) ? $element['#show_title'] : FALSE,
+         ],
+       ],
+     ];
+@@ -171,6 +189,9 @@ class DropzoneJs extends FormElement {
+         $tmp_upload_scheme = \Drupal::configFactory()->get('dropzonejs.settings')->get('tmp_upload_scheme');
+ 
+         foreach ($file_names as $name) {
++          // Extract the metadata (alt, title) if present.
++          $metadata = static::extractAndRemoveMetadataFromFilename($name);
++
+           // The upload handler appended the txt extension to the file for
+           // security reasons. We will remove it in this callback.
+           $old_filepath = $tmp_upload_scheme . '://' . $name;
+@@ -194,6 +215,7 @@ class DropzoneJs extends FormElement {
+               $return['uploaded_files'][] = [
+                 'path' => $move_result,
+                 'filename' => $name,
++                'metadata' => $metadata,
+               ];
+             }
+             else {
+@@ -238,4 +260,34 @@ class DropzoneJs extends FormElement {
+     return implode('.', $parts);
+   }
+ 
++  /**
++   * Extract and remove the metadata from the filename.
++   *
++   * @param $fileName
++   *   The filename that contains the metadata.
++   *
++   * @return array
++   *   The metadata.
++   */
++  protected static function extractAndRemoveMetadataFromFilename(&$fileName) {
++    $metadata = [
++      'title' => '',
++      'alt' => '',
++    ];
++
++    preg_match(self::TITLE_METADATA_REGEX, $fileName, $matchResult);
++    if (isset($matchResult[1]) && $matchResult[1] !== '') {
++      $metadata['title'] = $matchResult[1];
++      $fileName = preg_replace(self::TITLE_METADATA_REGEX, '', $fileName);
++    }
++
++    preg_match(self::ALT_METADATA_REGEX, $fileName, $matchResult);
++    if (isset($matchResult[1]) && $matchResult[1] !== '') {
++      $metadata['alt'] = $matchResult[1];
++      $fileName = preg_replace(self::ALT_METADATA_REGEX, '', $fileName);
++    }
++
++    return $metadata;
++  }
++
+ }
