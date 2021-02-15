@@ -1,0 +1,238 @@
+diff --git a/config/config/schema/paragraphs_table.schema.yml b/config/config/schema/paragraphs_table.schema.yml
+deleted file mode 100644
+index 3a8e687..0000000
+--- a/config/config/schema/paragraphs_table.schema.yml
++++ /dev/null
+@@ -1,35 +0,0 @@
+-#field formatter settings for each field
+-field.formatter.settings.view_formatter:
+-  type: mapping
+-  label: 'Paragraphs table field formatter settings.'
+-  mapping:
+-    view_mode:
+-      type: string
+-      label: 'View Mode'
+-    hide_empty:
+-      type: boolean
+-      label: 'Hide Empty'
+-    empty:
+-      type: boolean
+-      label: 'Empty'
+-    caption:
+-      type: string
+-      label: 'Caption'
+-    orientation:
+-      type: string
+-      label: 'Orientation'
+-    header_column:
+-      type: string
+-      label: 'Header Column'
+-
+-#field widget settings for each field
+-field.widget.settings.view_widget:
+-  type: mapping
+-  label: 'Paragraphs table widget settings'
+-  mapping:
+-    nodragging:
+-      type: boolean
+-      label: 'No dragging'
+-    hide_title:
+-      type: boolean
+-      label: 'Hide title'
+diff --git a/config/schema/paragraphs_table.schema.yml b/config/schema/paragraphs_table.schema.yml
+new file mode 100644
+index 0000000..7e04bbd
+--- /dev/null
++++ b/config/schema/paragraphs_table.schema.yml
+@@ -0,0 +1,61 @@
++field.formatter.settings.paragraphs_table_formatter:
++  type: mapping
++  label: 'Paragraphs table field formatter settings.'
++  mapping:
++    view_mode:
++      type: string
++      label: 'View Mode'
++    vertical:
++      type: boolean
++      label: 'Table vertical'
++    caption:
++      type: string
++      label: 'Caption'
++    mode:
++      type: string
++      label: 'Table mode'
++    chart_type:
++      type: string
++      label: 'Chart type'
++    chart_width:
++      type: integer
++      label: 'Chart width'
++    chart_height:
++      type: integer
++      label: 'Chart height'
++    import:
++      type: string
++      label: 'Import'
++    empty_cell_value:
++      type: boolean
++      label: 'Fill blank cells in table'
++    empty:
++      type: boolean
++      label: 'Hide empty columns'
++    ajax:
++      type: boolean
++      label: 'Load table with ajax'
++    custom_class:
++      type: string
++      label: 'Set table class'
++    hide_line_operations:
++      type: boolean
++      label: 'Hide line operations'
++
++field.widget.settings.paragraphs_table_widget:
++  type: field.widget.settings.paragraphs
++  mapping:
++    vertical:
++      type: boolean
++      label: 'Table vertical'
++    paste_clipboard:
++      type: boolean
++      label: 'Paste from clipboard'
++    show_all:
++      type: boolean
++      label: 'Show all'
++    features:
++      type: sequence
++      label: 'Features'
++      sequence:
++        type: string
+\ No newline at end of file
+diff --git a/paragraphs_table.module b/paragraphs_table.module
+index daedcd8..87475d4 100644
+--- a/paragraphs_table.module
++++ b/paragraphs_table.module
+@@ -81,7 +81,7 @@ function paragraphs_table_preprocess_field_multiple_value_form(&$variables) {
+         elseif (!empty($element["#paragraphsTable"]["#show_all"])) {
+           unset($variables["table"]["#tabledrag"]);
+         }
+-        $variables["table"]["#header"] = _paragraphs_table_header($element["#paragraphsTable"]["#fields"], $element["#paragraphsTable"]["#show_all"], $row_weight, empty($element[0]));
++        $variables["table"]["#header"] = _paragraphs_table_header($element["#paragraphsTable"]["#fields"], $element["#paragraphsTable"]["#show_all"], $row_weight, (isset($variables['table']['#rows']) && count($variables['table']['#rows']) == 0));
+         $remove_row = FALSE;
+         foreach ($variables["table"]["#rows"] as $delta => $rows) {
+           $row = _paragraphs_table_row($element["#paragraphsTable"]["#fields"], $rows['data'], $element["#paragraphsTable"]["#show_all"]);
+diff --git a/paragraphs_table.schema.yml b/paragraphs_table.schema.yml
+deleted file mode 100644
+index c03aedd..0000000
+--- a/paragraphs_table.schema.yml
++++ /dev/null
+@@ -1,50 +0,0 @@
+-field.widget.settings.paragraphs_field_widget:
+-  type: mapping
+-  label: 'Paragraphs field widget widget settings'
+-  mapping:
+-    size:
+-      type: integer
+-      label: 'Size'
+-    placeholder:
+-      type: textfield
+-      label: 'Placeholder'
+-field.widget.settings.paragraphs_table_field_widget:
+-  type: mapping
+-  label: 'Paragraphs table field widget widget settings'
+-  mapping:
+-    size:
+-      type: integer
+-      label: 'Size'
+-    placeholder:
+-      type: textfield
+-      label: 'Placeholder'
+-field.widget.settings.paragraph_table_widget:
+-  type: mapping
+-  label: 'Paragraph table widget widget settings'
+-  mapping:
+-    size:
+-      type: integer
+-      label: 'Size'
+-    placeholder:
+-      type: textfield
+-      label: 'Placeholder'
+-field.widget.settings.paragraph_table_widget:
+-  type: mapping
+-  label: 'Paragraph table widget widget settings'
+-  mapping:
+-    size:
+-      type: integer
+-      label: 'Size'
+-    placeholder:
+-      type: textfield
+-      label: 'Placeholder'
+-field.widget.settings.paragraphs_table_widget:
+-  type: mapping
+-  label: 'Paragraphs table widget widget settings'
+-  mapping:
+-    size:
+-      type: integer
+-      label: 'Size'
+-    placeholder:
+-      type: textfield
+-      label: 'Placeholder'
+diff --git a/src/Plugin/Field/FieldFormatter/ParagraphsTableFormatter.php b/src/Plugin/Field/FieldFormatter/ParagraphsTableFormatter.php
+index ec3f5b0..b34146f 100644
+--- a/src/Plugin/Field/FieldFormatter/ParagraphsTableFormatter.php
++++ b/src/Plugin/Field/FieldFormatter/ParagraphsTableFormatter.php
+@@ -94,6 +94,7 @@ class ParagraphsTableFormatter extends EntityReferenceFormatterBase {
+         'empty' => FALSE,
+         'ajax' => FALSE,
+         'custom_class' => '',
++        'hide_line_operations' => FALSE
+       ] + parent::defaultSettings();
+   }
+ 
+@@ -201,6 +202,11 @@ class ParagraphsTableFormatter extends EntityReferenceFormatterBase {
+         '#type' => 'textfield',
+         '#default_value' => $this->getSettings()['custom_class'],
+       ],
++      'hide_line_operations' => [
++        '#title' => $this->t('Hide line operations'),
++        '#type' => 'checkbox',
++        '#default_value' => $this->getSettings()['hide_line_operations'],
++      ],
+     ];
+     if (\Drupal::service('module_handler')->moduleExists('quick_data')) {
+       $settingForm['import'] = [
+@@ -251,6 +257,9 @@ class ParagraphsTableFormatter extends EntityReferenceFormatterBase {
+     if (!empty($this->getSetting('custom_class'))) {
+       $summary[] = $this->t('Custom class: @class', ['@class' => $this->getSetting('custom_class')]);
+     }
++    if (!empty($this->getSetting('hide_line_operations'))) {
++      $summary[] = $this->t('Hide line operations.');
++    }
+     return $summary;
+   }
+ 
+@@ -289,7 +298,12 @@ class ParagraphsTableFormatter extends EntityReferenceFormatterBase {
+     $table_rows = $notEmptyColumn = [];
+     if (in_array($setting['mode'], ['datatables', 'bootstrapTable']) || empty($setting['mode'])) {
+       if (empty($setting["ajax"]) && !empty($entities)) {
+-        $table_rows = $this->getPreparedRenderedEntities($targetType, $targetBundle, $entities, $fields, $notEmptyColumn, $view_mode, $hasPermission);
++        $setting = $this->getSettings();
++        $entity_permssion = $hasPermission;
++        if (!empty($setting['hide_line_operations'])) {
++          $entity_permssion = FALSE;
++        }
++        $table_rows = $this->getPreparedRenderedEntities($targetType, $targetBundle, $entities, $fields, $notEmptyColumn, $view_mode, $entity_permssion);
+         //remove empty columns
+         if (!empty($setting["empty"]) && !empty($notEmptyColumn)) {
+           foreach ($table_header as $field_name => $label_column) {
+diff --git a/src/Plugin/Field/FieldWidget/ParagraphsTableWidget.php b/src/Plugin/Field/FieldWidget/ParagraphsTableWidget.php
+index c7893cc..36d8426 100644
+--- a/src/Plugin/Field/FieldWidget/ParagraphsTableWidget.php
++++ b/src/Plugin/Field/FieldWidget/ParagraphsTableWidget.php
+@@ -29,7 +29,6 @@ class ParagraphsTableWidget extends ParagraphsWidget {
+         'vertical' => FALSE,
+         'paste_clipboard' => FALSE,
+         'show_all' => FALSE,
+-        'duplicate' => FALSE,
+         'features' => ['duplicate' => 'duplicate'],
+       ] + parent::defaultSettings();
+   }
