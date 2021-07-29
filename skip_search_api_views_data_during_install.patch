@@ -1,0 +1,16 @@
+diff --git a/search_api.views.inc b/search_api.views.inc
+index 60da01d5..477668f8 100644
+--- a/search_api.views.inc
++++ b/search_api.views.inc
+@@ -39,6 +39,11 @@ use Drupal\search_api\Utility\Utility;
+ function search_api_views_data() {
+   $data = [];
+ 
++  // Do not do this during installation
++  if (\Drupal\Core\Installer\InstallerKernel::installationAttempted()) {
++    return $data;
++  }
++
+   /** @var \Drupal\search_api\IndexInterface $index */
+   foreach (Index::loadMultiple() as $index) {
+     try {
