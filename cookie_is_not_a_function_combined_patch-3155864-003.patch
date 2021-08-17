@@ -1,0 +1,26 @@
+diff --git a/js/text_resize.js b/js/text_resize.js
+index 17a63b1..50221fc 100755
+--- a/js/text_resize.js
++++ b/js/text_resize.js
+@@ -47,7 +47,7 @@
+         }
+       }
+       // Changer links will change the text size when clicked
+-      $('a.changer').click(function () {
++      $('a.changer').once('changer').click(function () {
+         // Set the current font size of the specified section as a variable
+         var currentFontSize = parseFloat(elementToResize.css('font-size'), 10);
+         // Set the current line-height
+diff --git a/text_resize.libraries.yml b/text_resize.libraries.yml
+index 210903c..5f1ee5a 100755
+--- a/text_resize.libraries.yml
++++ b/text_resize.libraries.yml
+@@ -8,6 +8,8 @@ text_resize.resize:
+       css/text_resize.css: {}
+   dependencies:
+     - core/jquery
++    - core/jquery.once
++    - core/jquery.cookie
+     - core/drupal
+     - core/drupal.form
+     - core/drupalSettings
