@@ -1,0 +1,14 @@
+diff --git a/core/modules/layout_builder/src/EventSubscriber/SetInlineBlockDependency.php b/core/modules/layout_builder/src/EventSubscriber/SetInlineBlockDependency.php
+index d1ff4ad3dc..83395b34be 100644
+--- a/core/modules/layout_builder/src/EventSubscriber/SetInlineBlockDependency.php
++++ b/core/modules/layout_builder/src/EventSubscriber/SetInlineBlockDependency.php
+@@ -132,7 +132,8 @@ protected function getInlineBlockDependency(BlockContentInterface $block_content
+     $layout_entity_storage = $this->entityTypeManager->getStorage($layout_entity_info->layout_entity_type);
+     $layout_entity = $layout_entity_storage->load($layout_entity_info->layout_entity_id);
+     if ($this->isLayoutCompatibleEntity($layout_entity)) {
+-      if ($this->isBlockRevisionUsedInEntity($layout_entity, $block_content)) {
++      $affected_bundles = ['content_block', 'country_overview_block', 'teasers'];
++      if ($this->isBlockRevisionUsedInEntity($layout_entity, $block_content) || in_array($block_content->bundle(), $affected_bundles)) {
+         return $layout_entity;
+       }
+ 
