@@ -1,0 +1,138 @@
+diff --git a/src/Plugin/SchedulerField/Type/SchedulerFieldTypeDisabled.php b/src/Plugin/SchedulerField/Type/SchedulerFieldTypeDisabled.php
+index 79ff33a..1b836d4 100644
+--- a/src/Plugin/SchedulerField/Type/SchedulerFieldTypeDisabled.php
++++ b/src/Plugin/SchedulerField/Type/SchedulerFieldTypeDisabled.php
+@@ -4,6 +4,7 @@ namespace Drupal\scheduler_field\Plugin\SchedulerField\Type;
+ 
+ use Drupal\Core\Database\Query\SelectInterface;
+ use Drupal\Core\Entity\EntityStorageInterface;
++use Drupal\field\FieldStorageConfigInterface;
+ use Drupal\scheduler_field\SchedulerFieldTypePluginBase;
+ 
+ /**
+@@ -25,7 +26,7 @@ class SchedulerFieldTypeDisabled extends SchedulerFieldTypePluginBase {
+   public function processSchedulerQuery(
+     SelectInterface $query,
+     EntityStorageInterface $entity_storage,
+-    $field_name
++    FieldStorageConfigInterface $field_storage
+   ): void {}
+ 
+ }
+diff --git a/src/Plugin/SchedulerField/Type/SchedulerFieldTypePublication.php b/src/Plugin/SchedulerField/Type/SchedulerFieldTypePublication.php
+index abf04ab..8d955d7 100644
+--- a/src/Plugin/SchedulerField/Type/SchedulerFieldTypePublication.php
++++ b/src/Plugin/SchedulerField/Type/SchedulerFieldTypePublication.php
+@@ -7,6 +7,7 @@ use Drupal\Core\Datetime\DrupalDateTime;
+ use Drupal\Core\Entity\ContentEntityInterface;
+ use Drupal\Core\Entity\EntityStorageInterface;
+ use Drupal\Core\Field\FieldItemInterface;
++use Drupal\field\FieldStorageConfigInterface;
+ use Drupal\scheduler_field\SchedulerFieldTypePluginBase;
+ 
+ /**
+@@ -56,24 +57,26 @@ class SchedulerFieldTypePublication extends SchedulerFieldTypePluginBase {
+   /**
+    * {@inheritDoc}
+    */
+-  public function processSchedulerQuery(SelectInterface $query, EntityStorageInterface $entity_storage, $field_name): void {
++  public function processSchedulerQuery(SelectInterface $query, EntityStorageInterface $entity_storage, FieldStorageConfigInterface $field_storage): void {
++    $field_name = $field_storage->getName();
+     $entity_type_id = $entity_storage->getEntityTypeId();
+     $field_table = $this->getFieldTableName($entity_type_id, $field_name);
+-    $data_table = $entity_storage->getDataTable();
++    $data_table = $entity_storage->getDataTable() ?? $entity_storage->getBaseTable();
++    $date_format = ($field_storage->getSetting('datetime_type') === 'datetime') ? 'Y-m-d\TH:i:s' : 'Y-m-d';
+ 
+     $now = new DrupalDateTime();
+     // Prepare query to filter entities to publish.
+     $query_to_publish = $query->andConditionGroup();
+     $end_date_condition = $query->orConditionGroup();
+-    $query_to_publish->condition("$field_table.${field_name}_value", $now->format('Y-m-d'), '<')
++    $query_to_publish->condition("$field_table.${field_name}_value", $now->format($date_format), '<')
+       ->condition("$data_table.status", 0);
+-    $end_date_condition->condition("$field_table.${field_name}_end_value", $now->format('Y-m-d'), '>')
++    $end_date_condition->condition("$field_table.${field_name}_end_value", $now->format($date_format), '>')
+       ->condition("$field_table.${field_name}_end_value", NULL, 'IS NULL');
+     $query_to_publish->condition($end_date_condition);
+ 
+     // Prepare query fo filter entities to unpublish.
+     $query_to_unpublish = $query->andConditionGroup();
+-    $query_to_unpublish->condition("$field_table.${field_name}_end_value", $now->format('Y-m-d'), '<')
++    $query_to_unpublish->condition("$field_table.${field_name}_end_value", $now->format($date_format), '<')
+       ->condition("$field_table.${field_name}_end_value", NULL, 'IS NOT NULL')
+       ->condition("$data_table.status", 1);
+ 
+diff --git a/src/SchedulerFieldTypePluginBase.php b/src/SchedulerFieldTypePluginBase.php
+index fb572a2..844f276 100644
+--- a/src/SchedulerFieldTypePluginBase.php
++++ b/src/SchedulerFieldTypePluginBase.php
+@@ -9,6 +9,7 @@ use Drupal\Core\Entity\ContentEntityInterface;
+ use Drupal\Core\Entity\EntityStorageInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Field\FieldItemInterface;
++use Drupal\field\FieldStorageConfigInterface;
+ use Symfony\Component\DependencyInjection\ContainerInterface;
+ 
+ /**
+@@ -84,6 +85,7 @@ abstract class SchedulerFieldTypePluginBase extends PluginBase implements Schedu
+     // entity types link to this fields and get all entities that need to be
+     // updated.
+     $fields_storage = $this->entityTypeManager->getStorage('field_storage_config')->loadByProperties(['type' => 'scheduler_field']);
++    /** @var \Drupal\field\FieldStorageConfigInterface $field_storage */
+     foreach ($fields_storage as $field_storage) {
+       $entity_type_id = $field_storage->getTargetEntityTypeId();
+       $entity_storage = $this->entityTypeManager->getStorage($entity_type_id);
+@@ -101,11 +103,14 @@ abstract class SchedulerFieldTypePluginBase extends PluginBase implements Schedu
+       $data_table = $entity_storage->getDataTable();
+       $query = $this->database->select($base_table, $base_table);
+       $query->addField($base_table, $entity_key);
+-      $query->join($data_table, $data_table, "$base_table.$entity_key = $data_table.$entity_key");
++      if (!empty($data_table)) {
++        $query->join($data_table, $data_table, "$base_table.$entity_key = $data_table.$entity_key");
++      }
+       $query->join($field_table, $field_table, "$base_table.$entity_key = $field_table.entity_id");
+       $query->condition("$field_table.${field_name}_scheduler_type", $this->getPluginId(), '=');
+ 
+-      $this->processSchedulerQuery($query, $entity_storage, $field_storage->getName());
++      $this->processSchedulerQuery($query, $entity_storage, $field_storage);
++
+       $result = $query->execute();
+ 
+       foreach ($result as $row) {
+@@ -119,7 +124,7 @@ abstract class SchedulerFieldTypePluginBase extends PluginBase implements Schedu
+   /**
+    * {@inheritDoc}
+    */
+-  public function processSchedulerQuery(SelectInterface $query, EntityStorageInterface $entity_storage, $field_name): void {}
++  public function processSchedulerQuery(SelectInterface $query, EntityStorageInterface $entity_storage, FieldStorageConfigInterface $field_storage): void {}
+ 
+   /**
+    * Get the table name of an entity field.
+diff --git a/src/SchedulerFieldTypePluginInterface.php b/src/SchedulerFieldTypePluginInterface.php
+index 6eb3d42..57bb9dc 100644
+--- a/src/SchedulerFieldTypePluginInterface.php
++++ b/src/SchedulerFieldTypePluginInterface.php
+@@ -8,6 +8,7 @@ use Drupal\Core\Entity\EntityStorageInterface;
+ use Drupal\Core\Field\FieldItemInterface;
+ use Drupal\Core\Plugin\ContainerFactoryPluginInterface;
+ use Drupal\Component\Plugin\PluginInspectionInterface;
++use Drupal\field\FieldStorageConfigInterface;
+ 
+ /**
+  * Scheduler field type plugin interface.
+@@ -53,9 +54,11 @@ interface SchedulerFieldTypePluginInterface extends PluginInspectionInterface, C
+    *   The query to alter.
+    * @param \Drupal\Core\Entity\EntityStorageInterface $entity_storage
+    *   The entity storage.
+-   * @param string $field_name
+-   *   The field name to apply.
++   * @param \Drupal\field\FieldStorageConfigInterface $field_storage
++   *   The field storage.
++   *
++   * @return void
+    */
+-  public function processSchedulerQuery(SelectInterface $query, EntityStorageInterface $entity_storage, $field_name): void;
++  public function processSchedulerQuery(SelectInterface $query, EntityStorageInterface $entity_storage, FieldStorageConfigInterface $field_storage): void;
+ 
+ }
