@@ -1,0 +1,482 @@
+diff --git a/config/schema/scheduler_field.schema.yml b/config/schema/scheduler_field.schema.yml
+new file mode 100644
+index 0000000..51e92d6
+--- /dev/null
++++ b/config/schema/scheduler_field.schema.yml
+@@ -0,0 +1,13 @@
++field.widget.settings.scheduler_field_default:
++  type: mapping
++  label: 'Scheduler field default widget settings'
++  mapping:
++    show_end_date:
++      type: boolean
++      label: 'Show the end date field.'
++    show_type_selector:
++      type: boolean
++      label: 'Show the schedule type selector.'
++    set_start_date_from_end:
++      type: boolean
++      label: 'Set start date depending on end date.'
+\ No newline at end of file
+diff --git a/src/Cron.php b/src/Cron.php
+index 5b6628f..e960dd8 100644
+--- a/src/Cron.php
++++ b/src/Cron.php
+@@ -57,7 +57,7 @@ class Cron implements CronInterface {
+     foreach ($this->schedulerFieldTypeManager->getDefinitions() as $scheduler_field_type_info) {
+       if ($scheduler_field_type_info['process_during_cron']) {
+         $scheduler_field_type = $this->schedulerFieldTypeManager->createInstance($scheduler_field_type_info['id']);
+-        $entities = $scheduler_field_type->processScheduler();
++        $entities += $scheduler_field_type->processScheduler();
+       }
+     }
+ 
+diff --git a/src/Plugin/Field/FieldWidget/SchedulerFieldDefaultWidget.php b/src/Plugin/Field/FieldWidget/SchedulerFieldDefaultWidget.php
+index f8e2bfe..52d85bd 100644
+--- a/src/Plugin/Field/FieldWidget/SchedulerFieldDefaultWidget.php
++++ b/src/Plugin/Field/FieldWidget/SchedulerFieldDefaultWidget.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\scheduler_field\Plugin\Field\FieldWidget;
+ 
++use Drupal\Core\Datetime\DrupalDateTime;
+ use Drupal\Core\Field\FieldItemListInterface;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\datetime_range\Plugin\Field\FieldWidget\DateRangeDefaultWidget;
+@@ -19,20 +20,107 @@ use Drupal\datetime_range\Plugin\Field\FieldWidget\DateRangeDefaultWidget;
+  */
+ class SchedulerFieldDefaultWidget extends DateRangeDefaultWidget {
+ 
++ /**
++   * {@inheritdoc}
++   */
++  public static function defaultSettings() {
++    return [
++      'show_end_date' => TRUE,
++      'show_type_selector' => TRUE,
++      'set_start_date_from_end' => FALSE,
++    ] + parent::defaultSettings();
++  }
++
++  /**
++   * {@inheritdoc}
++   */
++  public function settingsForm(array $form, FormStateInterface $form_state) {
++    $settings = $this->getSettings();
++
++    $element['show_end_date'] = [
++      '#type' => 'checkbox',
++      '#title' => $this->t('Show the end date field.'),
++      '#default_value' => $settings['show_end_date'],
++    ];
++    $element['show_type_selector'] = [
++      '#type' => 'checkbox',
++      '#title' => $this->t('Show the schedule type selector.'),
++      '#default_value' => $settings['show_type_selector'],
++    ];
++
++    $element['set_start_date_from_end'] = [
++      '#type' => 'checkbox',
++      '#title' => $this->t('Set start date depending on end date.'),
++      '#description' => $this->t('Set empty start date to <em>now</em> if end date is set.'),
++      '#default_value' => $settings['set_start_date_from_end'],
++    ];
++
++    return $element;
++  }
++
++  /**
++   * {@inheritdoc}
++   */
++  public function settingsSummary() {
++    $summary = [];
++
++    $summary[] = $this->t('Show end date: @enddate', ['@enddate' => $this->getSetting('show_end_date') ? $this->t('Yes') : $this->t('No')]);
++    $summary[] = $this->t('Show schedule type selector: @type', ['@type' => $this->getSetting('show_type_selector') ? $this->t('Yes') : $this->t('No')]);
++    if ($this->getSetting('set_start_date_from_end')) {
++      $summary[] = $this->t('Set start date depending on end date.');
++    }
++
++    return $summary;
++  }
++
+   /**
+    * {@inheritdoc}
+    */
+   public function formElement(FieldItemListInterface $items, $delta, array $element, array &$form, FormStateInterface $form_state) {
++    $default_type = $items->getFieldDefinition()->getSetting('scheduler_type');
+     $element = parent::formElement($items, $delta, $element, $form, $form_state);
+     $element['scheduler_type'] = [
+       '#type' => 'select',
+       '#title' => $this->t('Scheduler type'),
+       '#options' => $items[$delta]->getSchedulerTypeOptions(),
+-      '#default_value' => $items[$delta]->scheduler_type,
++      '#default_value' => $items[$delta]->scheduler_type ?? $default_type,
+       '#weight' => -10,
+     ];
+ 
++    $settings = $this->getSettings();
++    if (!$settings['show_type_selector']) { 
++      $element['scheduler_type']['#access'] = FALSE; 
++    }
++
++    if (!$settings['show_end_date']) {
++      $element['end_value']['#access'] = FALSE; 
++      $element['value']['#title'] = $this->t('Date');
++    }
++
++    if ($settings['set_start_date_from_end']) {
++      $element['#element_validate'][] = [$this,
++        'setStartDateDependingOnEndDate'];
++    }
++
+     return $element;
+   }
+ 
++  /**
++   * set empty start date to now time if end date is set
++   *
++   * @param array $element
++   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param array $complete_form
++   */
++  public function setStartDateDependingOnEndDate(array &$element, FormStateInterface $form_state, array &$complete_form) {
++    $element_values = $form_state->getValue($element['#parents']);
++    if ($element_values['end_value'] instanceof DrupalDateTime && empty($element_values['value'])) {
++      $now_time = new DrupalDateTime();
++      if ($element_values['end_value'] > $now_time) {
++        $element_values['value'] = $now_time;
++        $form_state->setValue($element['#parents'], $element_values);
++      }
++    }
++  }
++
+ }
+diff --git a/src/Plugin/SchedulerField/Type/SchedulerFieldTypeDisabled.php b/src/Plugin/SchedulerField/Type/SchedulerFieldTypeDisabled.php
+index 79ff33a..1b836d4 100644
+--- a/src/Plugin/SchedulerField/Type/SchedulerFieldTypeDisabled.php
++++ b/src/Plugin/SchedulerField/Type/SchedulerFieldTypeDisabled.php
+@@ -4,6 +4,7 @@ namespace Drupal\scheduler_field\Plugin\SchedulerField\Type;
+ 
+ use Drupal\Core\Database\Query\SelectInterface;
+ use Drupal\Core\Entity\EntityStorageInterface;
++use Drupal\field\FieldStorageConfigInterface;
+ use Drupal\scheduler_field\SchedulerFieldTypePluginBase;
+ 
+ /**
+@@ -25,7 +26,7 @@ class SchedulerFieldTypeDisabled extends SchedulerFieldTypePluginBase {
+   public function processSchedulerQuery(
+     SelectInterface $query,
+     EntityStorageInterface $entity_storage,
+-    $field_name
++    FieldStorageConfigInterface $field_storage
+   ): void {}
+ 
+ }
+diff --git a/src/Plugin/SchedulerField/Type/SchedulerFieldTypePublication.php b/src/Plugin/SchedulerField/Type/SchedulerFieldTypePublication.php
+index abf04ab..325eab9 100644
+--- a/src/Plugin/SchedulerField/Type/SchedulerFieldTypePublication.php
++++ b/src/Plugin/SchedulerField/Type/SchedulerFieldTypePublication.php
+@@ -2,10 +2,7 @@
+ 
+ namespace Drupal\scheduler_field\Plugin\SchedulerField\Type;
+ 
+-use Drupal\Core\Database\Query\SelectInterface;
+-use Drupal\Core\Datetime\DrupalDateTime;
+ use Drupal\Core\Entity\ContentEntityInterface;
+-use Drupal\Core\Entity\EntityStorageInterface;
+ use Drupal\Core\Field\FieldItemInterface;
+ use Drupal\scheduler_field\SchedulerFieldTypePluginBase;
+ 
+@@ -22,66 +19,18 @@ use Drupal\scheduler_field\SchedulerFieldTypePluginBase;
+  */
+ class SchedulerFieldTypePublication extends SchedulerFieldTypePluginBase {
+ 
++  use SchedulerFieldTypePublicationTrait;
++
+   /**
+    * {@inheritDoc}
+    */
+   public function process(ContentEntityInterface $entity, FieldItemInterface $field_item) {
+-    $skip = FALSE;
+-    // If entity is unpublished, check if it has to be published thanks to date
+-    // values.
+-    $format = $field_item->getFieldDefinition()->getSetting('datetime_type') === 'datetime' ? 'Y-m-d\TH:i:s' : 'Y-m-d';
+-    if ($entity->get('status')->getString() === '0') {
+-      $date_begin = DrupalDateTime::createFromFormat($format, $field_item->get('value')->getValue());
+-      $date_end_value = $field_item->get('end_value')->getValue();
+-      $date_end = NULL === $date_end_value ? NULL : DrupalDateTime::createFromFormat($format, $date_end_value);
+-      $current_date = new DrupalDateTime();
+-      if ($date_begin < $current_date && (NULL === $date_end || $date_end > $current_date)) {
+-        $entity->set('status', 1);
+-        $entity->save();
+-        $skip = TRUE;
+-      }
++    if ($entity_processed = $this->publication_process($entity, $field_item)) {
++      $entity_processed->save();
+     }
+-    // If entity is published, check if it has to be unpublished thanks to date
+-    // values.
+-    if (FALSE === $skip && $entity->get('status')->getString() === '1') {
+-      $date_end = DrupalDateTime::createFromFormat($format, $field_item->get('end_value')->getValue());
+-      $current_date = new DrupalDateTime();
+-      if ($date_end < $current_date) {
+-        $entity->set('status', 0);
+-        $entity->save();
+-      }
++    elseif ($entity_processed = $this->depublication_process($entity, $field_item)) {
++      $entity_processed->save();
+     }
+   }
+ 
+-  /**
+-   * {@inheritDoc}
+-   */
+-  public function processSchedulerQuery(SelectInterface $query, EntityStorageInterface $entity_storage, $field_name): void {
+-    $entity_type_id = $entity_storage->getEntityTypeId();
+-    $field_table = $this->getFieldTableName($entity_type_id, $field_name);
+-    $data_table = $entity_storage->getDataTable();
+-
+-    $now = new DrupalDateTime();
+-    // Prepare query to filter entities to publish.
+-    $query_to_publish = $query->andConditionGroup();
+-    $end_date_condition = $query->orConditionGroup();
+-    $query_to_publish->condition("$field_table.${field_name}_value", $now->format('Y-m-d'), '<')
+-      ->condition("$data_table.status", 0);
+-    $end_date_condition->condition("$field_table.${field_name}_end_value", $now->format('Y-m-d'), '>')
+-      ->condition("$field_table.${field_name}_end_value", NULL, 'IS NULL');
+-    $query_to_publish->condition($end_date_condition);
+-
+-    // Prepare query fo filter entities to unpublish.
+-    $query_to_unpublish = $query->andConditionGroup();
+-    $query_to_unpublish->condition("$field_table.${field_name}_end_value", $now->format('Y-m-d'), '<')
+-      ->condition("$field_table.${field_name}_end_value", NULL, 'IS NOT NULL')
+-      ->condition("$data_table.status", 1);
+-
+-    // Finally add filters to query.
+-    $query_or = $query->orConditionGroup();
+-    $query_or->condition($query_to_publish)
+-      ->condition($query_to_unpublish);
+-    $query->condition($query_or);
+-  }
+-
+ }
+diff --git a/src/Plugin/SchedulerField/Type/SchedulerFieldTypePublicationSchedulerMimic.php b/src/Plugin/SchedulerField/Type/SchedulerFieldTypePublicationSchedulerMimic.php
+new file mode 100644
+index 0000000..f448fcc
+--- /dev/null
++++ b/src/Plugin/SchedulerField/Type/SchedulerFieldTypePublicationSchedulerMimic.php
+@@ -0,0 +1,42 @@
++<?php
++
++namespace Drupal\scheduler_field\Plugin\SchedulerField\Type;
++
++use Drupal\Core\Entity\ContentEntityInterface;
++use Drupal\Core\Field\FieldItemInterface;
++
++
++/**
++ * Plugin implementation of the 'Publication' SchedulerFieldType.
++ *
++ * This plugin changes status of entities to publish/unpublish entity changing
++ * 'status' property and mimics the behavior of scheduler module
++ *
++ * @SchedulerFieldType(
++ *   id = "scheduler_field_type_publication_scheduler",
++ *   name = @Translation("Publication with scheduler module behavior")
++ * )
++ */
++class SchedulerFieldTypePublicationSchedulerMimic extends SchedulerFieldTypePublication {
++
++  use SchedulerFieldTypePublicationTrait;
++
++  /**
++   * {@inheritDoc}
++   */
++  public function process(ContentEntityInterface $entity, FieldItemInterface $field_item) {
++    if ($entity_processed = $this->publication_process($entity, $field_item)) {
++      $date_end = $field_item->get('end_date')->getValue();
++      if (empty($date_end)) {
++        $entity_processed->{$field_item->getFieldDefinition()->getName()}->value = NULL;
++      }
++      $entity_processed->save();
++    }
++    elseif ($entity_processed = $this->depublication_process($entity, $field_item)) {
++      $entity_processed->{$field_item->getFieldDefinition()->getName()}->value = NULL;
++      $entity_processed->{$field_item->getFieldDefinition()->getName()}->end_value = NULL;
++      $entity_processed->save();
++    }
++  }
++
++}
+diff --git a/src/Plugin/SchedulerField/Type/SchedulerFieldTypePublicationTrait.php b/src/Plugin/SchedulerField/Type/SchedulerFieldTypePublicationTrait.php
+new file mode 100644
+index 0000000..1d82980
+--- /dev/null
++++ b/src/Plugin/SchedulerField/Type/SchedulerFieldTypePublicationTrait.php
+@@ -0,0 +1,92 @@
++<?php
++
++namespace Drupal\scheduler_field\Plugin\SchedulerField\Type;
++
++use Drupal\Core\Database\Query\SelectInterface;
++use Drupal\Core\Datetime\DrupalDateTime;
++use Drupal\Core\Entity\ContentEntityInterface;
++use Drupal\Core\Entity\EntityStorageInterface;
++use Drupal\Core\Field\FieldItemInterface;
++use Drupal\datetime\Plugin\Field\FieldType\DateTimeItemInterface;
++use Drupal\field\FieldStorageConfigInterface;
++
++trait SchedulerFieldTypePublicationTrait {
++
++  /**
++   * If entity is unpublished, check if it has to be published according to date
++   * date values.
++   *
++   * @param \Drupal\Core\Entity\ContentEntityInterface $entity
++   * @param \Drupal\Core\Field\FieldItemInterface $field_item
++   *
++   * @return \Drupal\Core\Entity\ContentEntityInterface|false
++   * @throws \Drupal\Core\TypedData\Exception\MissingDataException
++   */
++  public function publication_process(ContentEntityInterface $entity, FieldItemInterface $field_item) {
++    if ($entity->get('status')->getString() === '0') {
++      $date_begin = $field_item->get('start_date')->getValue();
++      $date_end = $field_item->get('end_date')->getValue();
++      $current_date = new DrupalDateTime('now', DateTimeItemInterface::STORAGE_TIMEZONE);
++      if ($date_begin < $current_date && (NULL === $date_end || $date_end > $current_date)) {
++        $entity->set('status', 1);
++        return $entity;
++      }
++    }
++    return FALSE;
++  }
++
++  /**
++   * If entity is published, check if it has to be unpublished according to
++   * date values.
++   *
++   * @param \Drupal\Core\Entity\ContentEntityInterface $entity
++   * @param \Drupal\Core\Field\FieldItemInterface $field_item
++   *
++   * @return \Drupal\Core\Entity\ContentEntityInterface|false
++   * @throws \Drupal\Core\TypedData\Exception\MissingDataException
++   */
++  public function depublication_process(ContentEntityInterface $entity, FieldItemInterface $field_item) {
++    if ($entity->get('status')->getString() === '1') {
++      $date_end = $field_item->get('end_date')->getValue();
++      $current_date = new DrupalDateTime('now', DateTimeItemInterface::STORAGE_TIMEZONE);
++      if ($date_end < $current_date) {
++        $entity->set('status', 0);
++        return $entity;
++      }
++    }
++    return FALSE;
++  }
++
++  /**
++   * {@inheritDoc}
++   */
++  public function processSchedulerQuery(SelectInterface $query, EntityStorageInterface $entity_storage, FieldStorageConfigInterface $field_storage): void {
++    $field_name = $field_storage->getName();
++    $entity_type_id = $entity_storage->getEntityTypeId();
++    $field_table = $this->getFieldTableName($entity_type_id, $field_name);
++    $data_table = $entity_storage->getDataTable() ?? $entity_storage->getBaseTable();
++    $date_format = ($field_storage->getSetting('datetime_type') === 'datetime') ? 'Y-m-d\TH:i:s' : 'Y-m-d';
++
++    $now = new DrupalDateTime('now', DateTimeItemInterface::STORAGE_TIMEZONE);
++    // Prepare query to filter entities to publish.
++    $query_to_publish = $query->andConditionGroup();
++    $end_date_condition = $query->orConditionGroup();
++    $query_to_publish->condition("$field_table.${field_name}_value", $now->format($date_format), '<')
++      ->condition("$data_table.status", 0);
++    $end_date_condition->condition("$field_table.${field_name}_end_value", $now->format($date_format), '>')
++      ->condition("$field_table.${field_name}_end_value", NULL, 'IS NULL');
++    $query_to_publish->condition($end_date_condition);
++
++    // Prepare query fo filter entities to unpublish.
++    $query_to_unpublish = $query->andConditionGroup();
++    $query_to_unpublish->condition("$field_table.${field_name}_end_value", $now->format($date_format), '<')
++      ->condition("$field_table.${field_name}_end_value", NULL, 'IS NOT NULL')
++      ->condition("$data_table.status", 1);
++
++    // Finally add filters to query.
++    $query_or = $query->orConditionGroup();
++    $query_or->condition($query_to_publish)
++      ->condition($query_to_unpublish);
++    $query->condition($query_or);
++  }
++}
+diff --git a/src/SchedulerFieldTypePluginBase.php b/src/SchedulerFieldTypePluginBase.php
+index fb572a2..844f276 100644
+--- a/src/SchedulerFieldTypePluginBase.php
++++ b/src/SchedulerFieldTypePluginBase.php
+@@ -9,6 +9,7 @@ use Drupal\Core\Entity\ContentEntityInterface;
+ use Drupal\Core\Entity\EntityStorageInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Field\FieldItemInterface;
++use Drupal\field\FieldStorageConfigInterface;
+ use Symfony\Component\DependencyInjection\ContainerInterface;
+ 
+ /**
+@@ -84,6 +85,7 @@ abstract class SchedulerFieldTypePluginBase extends PluginBase implements Schedu
+     // entity types link to this fields and get all entities that need to be
+     // updated.
+     $fields_storage = $this->entityTypeManager->getStorage('field_storage_config')->loadByProperties(['type' => 'scheduler_field']);
++    /** @var \Drupal\field\FieldStorageConfigInterface $field_storage */
+     foreach ($fields_storage as $field_storage) {
+       $entity_type_id = $field_storage->getTargetEntityTypeId();
+       $entity_storage = $this->entityTypeManager->getStorage($entity_type_id);
+@@ -101,11 +103,14 @@ abstract class SchedulerFieldTypePluginBase extends PluginBase implements Schedu
+       $data_table = $entity_storage->getDataTable();
+       $query = $this->database->select($base_table, $base_table);
+       $query->addField($base_table, $entity_key);
+-      $query->join($data_table, $data_table, "$base_table.$entity_key = $data_table.$entity_key");
++      if (!empty($data_table)) {
++        $query->join($data_table, $data_table, "$base_table.$entity_key = $data_table.$entity_key");
++      }
+       $query->join($field_table, $field_table, "$base_table.$entity_key = $field_table.entity_id");
+       $query->condition("$field_table.${field_name}_scheduler_type", $this->getPluginId(), '=');
+ 
+-      $this->processSchedulerQuery($query, $entity_storage, $field_storage->getName());
++      $this->processSchedulerQuery($query, $entity_storage, $field_storage);
++
+       $result = $query->execute();
+ 
+       foreach ($result as $row) {
+@@ -119,7 +124,7 @@ abstract class SchedulerFieldTypePluginBase extends PluginBase implements Schedu
+   /**
+    * {@inheritDoc}
+    */
+-  public function processSchedulerQuery(SelectInterface $query, EntityStorageInterface $entity_storage, $field_name): void {}
++  public function processSchedulerQuery(SelectInterface $query, EntityStorageInterface $entity_storage, FieldStorageConfigInterface $field_storage): void {}
+ 
+   /**
+    * Get the table name of an entity field.
+diff --git a/src/SchedulerFieldTypePluginInterface.php b/src/SchedulerFieldTypePluginInterface.php
+index 6eb3d42..57bb9dc 100644
+--- a/src/SchedulerFieldTypePluginInterface.php
++++ b/src/SchedulerFieldTypePluginInterface.php
+@@ -8,6 +8,7 @@ use Drupal\Core\Entity\EntityStorageInterface;
+ use Drupal\Core\Field\FieldItemInterface;
+ use Drupal\Core\Plugin\ContainerFactoryPluginInterface;
+ use Drupal\Component\Plugin\PluginInspectionInterface;
++use Drupal\field\FieldStorageConfigInterface;
+ 
+ /**
+  * Scheduler field type plugin interface.
+@@ -53,9 +54,11 @@ interface SchedulerFieldTypePluginInterface extends PluginInspectionInterface, C
+    *   The query to alter.
+    * @param \Drupal\Core\Entity\EntityStorageInterface $entity_storage
+    *   The entity storage.
+-   * @param string $field_name
+-   *   The field name to apply.
++   * @param \Drupal\field\FieldStorageConfigInterface $field_storage
++   *   The field storage.
++   *
++   * @return void
+    */
+-  public function processSchedulerQuery(SelectInterface $query, EntityStorageInterface $entity_storage, $field_name): void;
++  public function processSchedulerQuery(SelectInterface $query, EntityStorageInterface $entity_storage, FieldStorageConfigInterface $field_storage): void;
+ 
+ }
