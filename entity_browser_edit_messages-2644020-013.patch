@@ -1,0 +1,104 @@
+diff --git a/config/schema/entity_browser.schema.yml b/config/schema/entity_browser.schema.yml
+index 84ff907..956aee6 100644
+--- a/config/schema/entity_browser.schema.yml
++++ b/config/schema/entity_browser.schema.yml
+@@ -180,6 +180,9 @@ field.widget.settings.entity_browser_entity_reference:
+     selection_mode:
+       type: string
+       label: 'Selection mode'
++    show_messages:
++      type: boolean
++      label: 'Show messages'
+ 
+ entity_browser.field_widget_display.label:
+   type: mapping
+diff --git a/entity_browser.module b/entity_browser.module
+index db086af..4b99627 100644
+--- a/entity_browser.module
++++ b/entity_browser.module
+@@ -81,6 +81,7 @@ function entity_browser_form_alter(&$form, FormStateInterface &$form_state) {
+       'options' => [
+         'query' => [
+           'details_id' => \Drupal::request()->query->get('details_id'),
++          'show_messages' => \Drupal::request()->query->get('show_messages'),
+         ],
+       ],
+       'disable-refocus' => TRUE,
+diff --git a/src/Controllers/EntityBrowserController.php b/src/Controllers/EntityBrowserController.php
+index 9ecf6eb..a8bfae3 100644
+--- a/src/Controllers/EntityBrowserController.php
++++ b/src/Controllers/EntityBrowserController.php
+@@ -73,6 +73,11 @@ class EntityBrowserController extends ControllerBase {
+     if ($operation && $form_state && !$form_state->isExecuted()) {
+       // Return the form as a modal dialog.
+       $form['#attached']['library'][] = 'core/drupal.dialog.ajax';
++      $form['messages'] = [
++        '#type' => 'status_messages',
++        '#weight' => -10000,
++        '#access' => (bool) $this->messenger()->all(),
++      ];
+       $title = $this->t('Edit entity @entity', ['@entity' => $entity->label()]);
+       $response = AjaxResponse::create()->addCommand(new OpenDialogCommand('#' . $entity->getEntityTypeId() . '-' . $entity->id() . '-edit-dialog', $title, $form, ['modal' => TRUE, 'width' => 800]));
+       return $response;
+@@ -82,9 +87,17 @@ class EntityBrowserController extends ControllerBase {
+       $response = AjaxResponse::create()->addCommand(new CloseDialogCommand('#' . $entity->getEntityTypeId() . '-' . $entity->id() . '-edit-dialog'));
+       // Also refresh the widget if "details_id" is provided.
+       $details_id = $request->query->get('details_id');
++      $show_messages = $request->query->get('show_messages');
+       if (!empty($details_id)) {
+         $response->addCommand(new ValueUpdatedCommand($details_id));
+-
++        $messages = [
++          '#type' => 'status_messages',
++          '#weight' => -10000,
++          '#access' => (bool) $this->messenger()->all(),
++        ];
++        if (!empty($show_messages) && $this->messenger()->all()) {
++          $response->addCommand(new OpenDialogCommand('#eb-messages-modal', $this->t('Messages'), $messages, ['modal' => TRUE, 'width' => '50%']));
++        }
+         if (empty($operation)) {
+           $response->addCommand(new AlertCommand($this->t("An edit form couldn't be found.")));
+         }
+diff --git a/src/Plugin/Field/FieldWidget/EntityReferenceBrowserWidget.php b/src/Plugin/Field/FieldWidget/EntityReferenceBrowserWidget.php
+index 0901eba..08aed31 100644
+--- a/src/Plugin/Field/FieldWidget/EntityReferenceBrowserWidget.php
++++ b/src/Plugin/Field/FieldWidget/EntityReferenceBrowserWidget.php
+@@ -141,6 +141,7 @@ class EntityReferenceBrowserWidget extends WidgetBase implements ContainerFactor
+       'field_widget_replace' => FALSE,
+       'field_widget_display_settings' => [],
+       'selection_mode' => EntityBrowserElement::SELECTION_MODE_APPEND,
++      'show_messages' => FALSE,
+     ] + parent::defaultSettings();
+   }
+ 
+@@ -265,6 +266,12 @@ class EntityReferenceBrowserWidget extends WidgetBase implements ContainerFactor
+       '#default_value' => $this->getSetting('selection_mode'),
+     ];
+ 
++    $element['show_messages'] = [
++      '#title' => $this->t('Show messages after auto closing entity browser.'),
++      '#type' => 'checkbox',
++      '#default_value' => $this->getSetting('show_messages'),
++    ];
++
+     $element['#element_validate'] = [[get_class($this), 'validateSettingsForm']];
+ 
+     return $element;
+@@ -322,6 +329,9 @@ class EntityReferenceBrowserWidget extends WidgetBase implements ContainerFactor
+         $summary[] = $this->t('View Mode: @view_mode', ['@view_mode' => $view_mode_label]);
+       }
+     }
++    if ($this->getSetting('show_messages')) {
++      $summary[] = $this->t('Show messages');
++    }
+     return $summary;
+   }
+ 
+@@ -660,6 +670,7 @@ class EntityReferenceBrowserWidget extends WidgetBase implements ContainerFactor
+                 'options' => [
+                   'query' => [
+                     'details_id' => $details_id,
++                    'show_messages' => $this->getSetting('show_messages'),
+                   ],
+                 ],
+               ],
