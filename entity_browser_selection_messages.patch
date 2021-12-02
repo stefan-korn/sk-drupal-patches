@@ -1,0 +1,68 @@
+diff --git a/js/entity_browser.iframe_selection.js b/js/entity_browser.iframe_selection.js
+index 34813a2..3de5859 100644
+--- a/js/entity_browser.iframe_selection.js
++++ b/js/entity_browser.iframe_selection.js
+@@ -16,4 +16,14 @@
+     .trigger('entities-selected', [drupalSettings.entity_browser.iframe.uuid, drupalSettings.entity_browser.iframe.entities])
+     .unbind('entities-selected').show();
+ 
++  // Output messages in a separate modal if there are some
++  const messages = drupalSettings.entity_browser.iframe.messages;
++  if (messages) {
++    const messageDialog = parent.jQuery('<div>' + drupalSettings.entity_browser.iframe.messages + '</div>').appendTo(parent.document.body);
++    parent.Drupal.dialog(messageDialog, {
++      title: Drupal.t('Messages'),
++      width: '50%',
++    }).showModal();
++  }
++
+ }(drupalSettings));
+diff --git a/js/entity_browser.modal_selection.js b/js/entity_browser.modal_selection.js
+index 6783b42..269d6ff 100644
+--- a/js/entity_browser.modal_selection.js
++++ b/js/entity_browser.modal_selection.js
+@@ -15,6 +15,16 @@
+     .trigger('entities-selected', [drupalSettings.entity_browser.modal.uuid, drupalSettings.entity_browser.modal.entities])
+     .unbind('entities-selected').show();
+ 
++  // Output messages in a separate modal if there are some
++  const messages = drupalSettings.entity_browser.modal.messages;
++  if (messages) {
++    const messageDialog = parent.jQuery('<div>' + drupalSettings.entity_browser.modal.messages + '</div>').appendTo(parent.document.body);
++    parent.Drupal.dialog(messageDialog, {
++      title: Drupal.t('Messages'),
++      width: '50%',
++    }).showModal();
++  }
++
+   // This is a silly solution, but works fo now. We should close the modal
+   // via ajax commands.
+   parent.jQuery(parent.document).find('.entity-browser-modal-iframe').parents('.ui-dialog').eq(0).find('.ui-dialog-titlebar-close').click();
+diff --git a/src/Plugin/EntityBrowser/Display/IFrame.php b/src/Plugin/EntityBrowser/Display/IFrame.php
+index 3eda8aa..697a79f 100644
+--- a/src/Plugin/EntityBrowser/Display/IFrame.php
++++ b/src/Plugin/EntityBrowser/Display/IFrame.php
+@@ -6,6 +6,7 @@ use Drupal\Component\Uuid\UuidInterface;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\Core\KeyValueStore\KeyValueStoreExpirableInterface;
++use Drupal\Core\Render\Element\StatusMessages;
+ use Drupal\Core\Routing\RouteMatchInterface;
+ use Drupal\Core\Url;
+ use Drupal\entity_browser\DisplayBase;
+@@ -209,6 +210,7 @@ class IFrame extends DisplayBase implements DisplayRouterInterface {
+    *   Response event.
+    */
+   public function propagateSelection(FilterResponseEvent $event) {
++    $messages = StatusMessages::renderMessages();
+     $render = [
+       '#attached' => [
+         'library' => ['entity_browser/' . $this->pluginDefinition['id'] . '_selection'],
+@@ -219,6 +221,7 @@ class IFrame extends DisplayBase implements DisplayRouterInterface {
+                 return [$item->id(), $item->uuid(), $item->getEntityTypeId()];
+               }, $this->entities),
+               'uuid' => $this->request->query->get('uuid'),
++              'messages' => $this->renderer->render($messages),
+             ],
+           ],
+         ],
