@@ -1,0 +1,162 @@
+diff --git a/src/Form/ProtectedPagesAddForm.php b/src/Form/ProtectedPagesAddForm.php
+index f98f06a..6db502c 100644
+--- a/src/Form/ProtectedPagesAddForm.php
++++ b/src/Form/ProtectedPagesAddForm.php
+@@ -3,6 +3,7 @@
+ namespace Drupal\protected_pages\Form;
+ 
+ use Drupal\Component\Utility\Html;
++use Drupal\Core\Cache\CacheTagsInvalidator;
+ use Drupal\Core\Form\FormBase;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\Core\Messenger\Messenger;
+@@ -52,6 +53,13 @@ class ProtectedPagesAddForm extends FormBase {
+    */
+   protected $aliasManager;
+ 
++  /**
++   * Cache tag invalidator.
++   *
++   * @var \Drupal\Core\Cache\CacheTagsInvalidator
++   */
++  protected $cacheTagsInvalidator;
++
+   /**
+    * Constructs a new ProtectedPagesAddForm.
+    *
+@@ -65,13 +73,16 @@ class ProtectedPagesAddForm extends FormBase {
+    *   The messenger service.
+    * @param \Drupal\path_alias\AliasManager $aliasManager
+    *   The path alias manager service.
++   * @param \Drupal\Core\Cache\CacheTagsInvalidator $cache_tags_invalidator
++   *   The cache tags invalidator service.
+    */
+-  public function __construct(PathValidatorInterface $path_validator, PasswordInterface $password, ProtectedPagesStorage $protectedPagesStorage, Messenger $messenger, AliasManager $aliasManager) {
++  public function __construct(PathValidatorInterface $path_validator, PasswordInterface $password, ProtectedPagesStorage $protectedPagesStorage, Messenger $messenger, AliasManager $aliasManager, CacheTagsInvalidator $cache_tags_invalidator) {
+     $this->pathValidator = $path_validator;
+     $this->password = $password;
+     $this->protectedPagesStorage = $protectedPagesStorage;
+     $this->messenger = $messenger;
+     $this->aliasManager = $aliasManager;
++    $this->cacheTagsInvalidator = $cache_tags_invalidator;
+   }
+ 
+   /**
+@@ -83,7 +94,8 @@ class ProtectedPagesAddForm extends FormBase {
+       $container->get('password'),
+       $container->get('protected_pages.storage'),
+       $container->get('messenger'),
+-      $container->get('path_alias.manager')
++      $container->get('path_alias.manager'),
++      $container->get('cache_tags.invalidator')
+     );
+   }
+ 
+@@ -173,7 +185,18 @@ class ProtectedPagesAddForm extends FormBase {
+     if ($pid) {
+       $this->messenger->addMessage($this->t('The protected page settings have been successfully saved.'));
+     }
+-    drupal_flush_all_caches();
++    $url_object = $this->pathValidator->getUrlIfValid($form_state->getValue('path'));
++    if ($url_object->getRouteName() === 'entity.node.canonical') {
++      $parameters = $url_object->getRouteParameters();
++      $nid = $parameters['node'] ?? FALSE;
++      if ($nid) {
++        $this->cacheTagsInvalidator->invalidateTags(['node:' . $nid]);
++      }
++    }
++    else {
++      // we do not want this
++      // drupal_flush_all_caches();
++    }
+     $form_state->setRedirect('protected_pages_list');
+   }
+ 
+diff --git a/src/Form/ProtectedPagesEditForm.php b/src/Form/ProtectedPagesEditForm.php
+index 2552e97..341b11b 100644
+--- a/src/Form/ProtectedPagesEditForm.php
++++ b/src/Form/ProtectedPagesEditForm.php
+@@ -3,6 +3,7 @@
+ namespace Drupal\protected_pages\Form;
+ 
+ use Drupal\Component\Utility\Html;
++use Drupal\Core\Cache\CacheTagsInvalidator;
+ use Drupal\Core\Form\FormBase;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\Core\Messenger\Messenger;
+@@ -52,6 +53,13 @@ class ProtectedPagesEditForm extends FormBase {
+    */
+   protected $aliasManager;
+ 
++  /**
++   * Cache tag invalidator.
++   *
++   * @var \Drupal\Core\Cache\CacheTagsInvalidator
++   */
++  protected $cacheTagsInvalidator;
++
+   /**
+    * Constructs a new ProtectedPagesAddForm.
+    *
+@@ -65,13 +73,16 @@ class ProtectedPagesEditForm extends FormBase {
+    *   The messenger service.
+    * @param \Drupal\path_alias\AliasManager $aliasManager
+    *   The path alias manager service.
++   * @param \Drupal\Core\Cache\CacheTagsInvalidator $cache_tags_invalidator
++   *   The cache tags invalidator service.
+    */
+-  public function __construct(PathValidatorInterface $path_validator, PasswordInterface $password, ProtectedPagesStorage $protectedPagesStorage, Messenger $messenger, AliasManager $aliasManager) {
++  public function __construct(PathValidatorInterface $path_validator, PasswordInterface $password, ProtectedPagesStorage $protectedPagesStorage, Messenger $messenger, AliasManager $aliasManager, CacheTagsInvalidator $cache_tags_invalidator) {
+     $this->pathValidator = $path_validator;
+     $this->password = $password;
+     $this->protectedPagesStorage = $protectedPagesStorage;
+     $this->messenger = $messenger;
+     $this->aliasManager = $aliasManager;
++    $this->cacheTagsInvalidator = $cache_tags_invalidator;
+   }
+ 
+   /**
+@@ -83,7 +94,8 @@ class ProtectedPagesEditForm extends FormBase {
+       $container->get('password'),
+       $container->get('protected_pages.storage'),
+       $container->get('messenger'),
+-      $container->get('path_alias.manager')
++      $container->get('path_alias.manager'),
++      $container->get('cache_tags.invalidator')
+     );
+   }
+ 
+@@ -192,7 +204,18 @@ class ProtectedPagesEditForm extends FormBase {
+ 
+     $this->protectedPagesStorage->updateProtectedPage($page_data, $form_state->getValue('pid'));
+     $this->messenger->addMessage($this->t('The protected page settings have been successfully saved.'));
+-    drupal_flush_all_caches();
++    $url_object = $this->pathValidator->getUrlIfValid($form_state->getValue('path'));
++    if ($url_object->getRouteName() === 'entity.node.canonical') {
++      $parameters = $url_object->getRouteParameters();
++      $nid = $parameters['node'] ?? FALSE;
++      if ($nid) {
++        $this->cacheTagsInvalidator->invalidateTags(['node:' . $nid]);
++      }
++    }
++    else {
++      // we do not want this
++      // drupal_flush_all_caches();
++    }
+     $form_state->setRedirect('protected_pages_list');
+   }
+ 
+diff --git a/src/Form/ProtectedPagesSettingForm.php b/src/Form/ProtectedPagesSettingForm.php
+index 67ebed4..0b9c567 100644
+--- a/src/Form/ProtectedPagesSettingForm.php
++++ b/src/Form/ProtectedPagesSettingForm.php
+@@ -256,7 +256,8 @@ class ProtectedPagesSettingForm extends ConfigFormBase {
+       $config->set('password.protected_pages_global_password', $password_hash);
+     }
+     $config->save();
+-    drupal_flush_all_caches();
++    // we do not want this
++    // drupal_flush_all_caches();
+     return parent::submitForm($form, $form_state);
+   }
+ 
