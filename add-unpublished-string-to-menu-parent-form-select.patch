@@ -1,0 +1,28 @@
+diff --git a/core/lib/Drupal/Core/Menu/MenuParentFormSelector.php b/core/lib/Drupal/Core/Menu/MenuParentFormSelector.php
+index bf8ca0f140..898ae05294 100644
+--- a/core/lib/Drupal/Core/Menu/MenuParentFormSelector.php
++++ b/core/lib/Drupal/Core/Menu/MenuParentFormSelector.php
+@@ -7,6 +7,7 @@
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\StringTranslation\StringTranslationTrait;
+ use Drupal\Core\StringTranslation\TranslationInterface;
++use Drupal\node\NodeInterface;
+ 
+ /**
+  * Default implementation of the menu parent form selector service.
+@@ -164,6 +165,15 @@ protected function parentSelectOptionsTreeWalk(array $tree, $menu_name, $indent,
+         if (!$link->isEnabled()) {
+           $title .= ' (' . $this->t('disabled') . ')';
+         }
++        $params = $link->getRouteParameters();
++        if (!empty($params['node']) && $link->getRouteName() === 'entity.node.canonical') {
++          $node = $this->entityTypeManager->getStorage('node')->load($params['node']);
++          if ($node instanceof NodeInterface) {
++            if (!$node->isPublished()) {
++              $title .= ' (' . $this->t('unpublished') . ')';
++            }
++          }
++        }
+         $options[$menu_name . ':' . $link->getPluginId()] = $title;
+         if (!empty($element->subtree)) {
+           $this->parentSelectOptionsTreeWalk($element->subtree, $menu_name, $indent . '--', $options, $exclude, $depth_limit, $cacheability);
