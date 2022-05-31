@@ -1,0 +1,17 @@
+diff --git a/src/MaxLengthCallbacks.php b/src/MaxLengthCallbacks.php
+index 5853985..ec67925 100644
+--- a/src/MaxLengthCallbacks.php
++++ b/src/MaxLengthCallbacks.php
+@@ -27,12 +27,6 @@ class MaxLengthCallbacks implements TrustedCallbackInterface {
+    *   The processed render array.
+    */
+   public static function maxlengthPreRender($element) {
+-    if (\Drupal::currentUser()->hasPermission('bypass maxlength')) {
+-      if (isset($element['#attributes']['maxlength'])) {
+-        $element['#attributes']['maxlength'] = $element['#maxlength'] ?? -1;
+-      }
+-      return $element;
+-    }
+ 
+     if (isset($element['#maxlength_js']) && $element['#maxlength_js'] === TRUE) {
+       if (isset($element['#attributes']['data-maxlength']) && $element['#attributes']['data-maxlength'] > 0) {
