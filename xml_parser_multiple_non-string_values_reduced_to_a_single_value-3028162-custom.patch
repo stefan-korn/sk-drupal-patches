@@ -1,0 +1,26 @@
+diff --git a/src/Plugin/migrate_plus/data_parser/SimpleXml.php b/src/Plugin/migrate_plus/data_parser/SimpleXml.php
+index 5e09822..f248ee9 100644
+--- a/src/Plugin/migrate_plus/data_parser/SimpleXml.php
++++ b/src/Plugin/migrate_plus/data_parser/SimpleXml.php
+@@ -68,7 +68,7 @@ class SimpleXml extends DataParserPluginBase {
+       foreach ($this->fieldSelectors() as $field_name => $xpath) {
+         foreach ($target_element->xpath($xpath) as $value) {
+           if ($value->children() && !trim((string) $value)) {
+-            $this->currentItem[$field_name] = $value;
++            $this->currentItem[$field_name][] = $value;
+           }
+           else {
+             $this->currentItem[$field_name][] = (string) $value;
+diff --git a/src/Plugin/migrate_plus/data_parser/Xml.php b/src/Plugin/migrate_plus/data_parser/Xml.php
+index 2eb4314..c832010 100644
+--- a/src/Plugin/migrate_plus/data_parser/Xml.php
++++ b/src/Plugin/migrate_plus/data_parser/Xml.php
+@@ -250,7 +250,7 @@ class Xml extends DataParserPluginBase {
+           // and has children then return the whole object for the process
+           // plugin or other row manipulation.
+           if ($value->children() && !trim((string) $value)) {
+-            $this->currentItem[$field_name] = $value;
++            $this->currentItem[$field_name][] = $value;
+           }
+           else {
+             $this->currentItem[$field_name][] = (string) $value;
