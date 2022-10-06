@@ -1,0 +1,726 @@
+diff --git a/README.md b/README.md
+index 696e212..5e25413 100644
+--- a/README.md
++++ b/README.md
+@@ -9,7 +9,8 @@ This is the Drupal integration for [DropzoneJS](http://www.dropzonejs.com/).
+ 1. Download this module
+ 2. [Download DropzoneJS](https://github.com/enyo/dropzone) and place it in the
+    libraries folder
+-3. Install dropzonejs the [usual way](https://www.drupal.org/docs/extending-drupal/installing-drupal-modules)
++3. Install dropzonejs the [usual way](https://www.drupal.org/docs/extending-drupal/installing-drupal-modules).
++   Note: version 5.7.0+ of the library is required when using chunked uploads.
+ 4. Remove "test" folder from libraries folder as it could constitute a
+    security risk to your site. See http://drupal.org/node/1189632 for more info.
+ 
+diff --git a/dropzonejs.libraries.yml b/dropzonejs.libraries.yml
+index b113779..2d900ef 100644
+--- a/dropzonejs.libraries.yml
++++ b/dropzonejs.libraries.yml
+@@ -24,6 +24,7 @@ integration:
+     - core/once
+     - core/jquery
+     - core/drupal
++    - core/drupal.ajax
+     - core/drupalSettings
+     - dropzonejs/dropzonejs
+ 
+diff --git a/dropzonejs.routing.yml b/dropzonejs.routing.yml
+index 05e084b..065d8f2 100644
+--- a/dropzonejs.routing.yml
++++ b/dropzonejs.routing.yml
+@@ -5,3 +5,17 @@ dropzonejs.upload:
+   requirements:
+     _permission: 'dropzone upload files'
+     _csrf_token: 'TRUE'
++dropzonejs.chunked.upload:
++  path: '/dropzonejs/chunked/upload'
++  defaults:
++    _controller: '\Drupal\dropzonejs\Controller\ChunkedUploadController::handleUploads'
++  requirements:
++    _permission: 'dropzone upload files'
++    _csrf_token: 'TRUE'
++dropzonejs.chunked.finalize:
++  path: '/dropzonejs/chunked/finalize'
++  defaults:
++    _controller: '\Drupal\dropzonejs\Controller\ChunkedUploadController::finalizeUpload'
++  requirements:
++    _permission: 'dropzone upload files'
++    _csrf_token: 'TRUE'
+diff --git a/dropzonejs.services.yml b/dropzonejs.services.yml
+index 107421e..676dc31 100644
+--- a/dropzonejs.services.yml
++++ b/dropzonejs.services.yml
+@@ -5,3 +5,6 @@ services:
+   dropzonejs.upload_handler:
+     class: Drupal\dropzonejs\UploadHandler
+     arguments: ['@request_stack', '@config.factory', '@transliteration', '@language_manager']
++  dropzonejs.chunked_upload_handler:
++    class: Drupal\dropzonejs\ChunkedUploadHandler
++    arguments: ['@request_stack', '@config.factory', '@transliteration', '@language_manager', '@file_system']
+diff --git a/js/dropzone.integration.js b/js/dropzone.integration.js
+index 30927d3..5f4eb9c 100644
+--- a/js/dropzone.integration.js
++++ b/js/dropzone.integration.js
+@@ -8,7 +8,42 @@
+ (function ($, Drupal, drupalSettings) {
+   'use strict';
+ 
+-  Drupal.dropzonejsInstances = [];
++  Drupal.dropzonejs = Drupal.dropzonejs || {};
++
++  Drupal.dropzonejs.instances = {};
++
++  Drupal.dropzonejs.chunksUploaded = function (file, done, el) {
++    var selector = $(el);
++    var input = selector.siblings('input');
++    var url = input.attr('data-finalize-path');
++
++    // Send request to merge chunks for current file.
++    Drupal.ajax({
++      url: url,
++      base: false,
++      element: false,
++      progress: false,
++      submit: {
++        filename: file.upload.filename,
++        dzuuid: file.upload.uuid,
++        dztotalfilesize: file.size,
++        dztotalchunkcount: file.upload.totalChunkCount
++      },
++      success: function (response) {
++        // Call dropzone's done callback. (see https://www.dropzonejs.com/#config-chunksUploaded)
++        // The file is transliterated on upload. The element has to reflect
++        // the real filename.
++        file.processedName = response.result;
++
++        done();
++      },
++      error: function (xhr, url) {
++        var instance = Drupal.dropzonejs.instances[selector.attr('id')];
++        var response = $.parseJSON(xhr.responseText);
++        instance._errorProcessing([file], response.error, xhr);
++      }
++    }).execute();
++  };
+ 
+   /* global Dropzone */
+   Drupal.behaviors.dropzonejsIntegraion = {
+@@ -46,6 +81,13 @@
+         };
+         var instanceConfig = drupalSettings.dropzonejs.instances[selector.attr('id')];
+ 
++        if (instanceConfig.chunking) {
++          var el = this;
++          config.chunksUploaded = function(file, done) {
++            Drupal.dropzonejs.chunksUploaded(file, done, el);
++          };
++        }
++
+         // If DropzoneJS instance is already registered on Element. There is no
+         // need to register it again.
+         if ($(once('register-dropzonejs', selector)).length !== selector.length) {
+@@ -77,11 +119,15 @@
+           var uploadedFilesElement = selector.siblings(':hidden');
+           var currentValue = uploadedFilesElement.attr('value') || '';
+ 
+-          // The file is transliterated on upload. The element has to reflect
+-          // the real filename.
+-          file.processedName = response.result;
++          // Chunked uplaods get an empty response.
++          // (see https://gitlab.com/meno/dropzone/-/blob/master/src/dropzone.js#L1978).
++          if (response) {
++            // The file is transliterated on upload. The element has to reflect
++            // the real filename.
++            file.processedName = response.result;
++          }
+ 
+-          uploadedFilesElement.attr('value', currentValue + response.result + ';');
++          uploadedFilesElement.attr('value', currentValue + file.processedName + ';');
+         });
+ 
+         // React on file removing.
+@@ -111,6 +157,8 @@
+             dropzoneInstance.removeFile(rejectedFiles[i]);
+           }
+         });
++
++        Drupal.dropzonejs.instances[selector.attr('id')] = dropzoneInstance;
+       });
+     }
+   };
+diff --git a/modules/eb_widget/config/schema/dropzonejs_eb_widget.schema.yml b/modules/eb_widget/config/schema/dropzonejs_eb_widget.schema.yml
+index ad564f5..a840871 100644
+--- a/modules/eb_widget/config/schema/dropzonejs_eb_widget.schema.yml
++++ b/modules/eb_widget/config/schema/dropzonejs_eb_widget.schema.yml
+@@ -38,6 +38,24 @@ entity_browser.browser.widget.dropzonejs:
+     thumbnail_method:
+       type: string
+       label: 'Method used for generating the thumbnail'
++    chunking:
++      type: boolean
++      label: 'Enable chunked uploads'
++    force_chunking:
++      type: boolean
++      label: 'Force each upload to be chunked, even if the file size is below chunk_size'
++    chunk_size:
++      type: integer
++      label: 'The chunk size in bytes'
++    parallel_chunk_uploads:
++      type: boolean
++      label: 'Upload multiple chunks in parallel'
++    retry_chunks:
++      type: boolean
++      label: 'Whether a chunk upload should be retried if it fails'
++    retry_chunks_limit:
++      type: integer
++      label: 'Number of times a chunk upload should be retried'
+ 
+ entity_browser.browser.widget.dropzonejs_media_entity:
+   type: entity_browser.browser.widget.dropzonejs
+diff --git a/modules/eb_widget/dropzonejs_eb_widget.install b/modules/eb_widget/dropzonejs_eb_widget.install
+index d3de4ef..aef2d60 100644
+--- a/modules/eb_widget/dropzonejs_eb_widget.install
++++ b/modules/eb_widget/dropzonejs_eb_widget.install
+@@ -98,3 +98,36 @@ function dropzonejs_eb_widget_update_8202() {
+     }
+   }
+ }
++
++/**
++ * Update configurations for new chunking keys.
++ */
++function dropzonejs_eb_widget_update_8203() {
++  /** @var \Drupal\entity_browser\Entity\EntityBrowser[] $entity_browsers */
++  $entity_browsers = EntityBrowser::loadMultiple();
++
++  foreach ($entity_browsers as $entity_browser) {
++    /** @var \Drupal\entity_browser\WidgetInterface[] $widgets */
++    $widgets = $entity_browser->getWidgets();
++
++    $has_config_changes = FALSE;
++    foreach ($widgets as $widget) {
++      if ($widget instanceof DropzoneJsEbWidget) {
++        $config = $widget->getConfiguration();
++
++        $config['settings']['chunking'] = FALSE;
++        $config['settings']['force_chunking'] = FALSE;
++        $config['settings']['chunk_size'] = 2000000;
++        $config['settings']['parallel_chunk_uploads'] = FALSE;
++        $config['settings']['retry_chunks'] = FALSE;
++        $config['settings']['retry_chunks_limit'] = 3;
++        $widget->setConfiguration($config);
++        $has_config_changes = TRUE;
++      }
++    }
++
++    if ($has_config_changes) {
++      $entity_browser->save();
++    }
++  }
++}
+diff --git a/modules/eb_widget/src/Plugin/EntityBrowser/Widget/DropzoneJsEbWidget.php b/modules/eb_widget/src/Plugin/EntityBrowser/Widget/DropzoneJsEbWidget.php
+index 121fe78..6dc2b02 100644
+--- a/modules/eb_widget/src/Plugin/EntityBrowser/Widget/DropzoneJsEbWidget.php
++++ b/modules/eb_widget/src/Plugin/EntityBrowser/Widget/DropzoneJsEbWidget.php
+@@ -142,6 +142,12 @@ class DropzoneJsEbWidget extends WidgetBase {
+       'resize_quality' => 1,
+       'resize_method' => 'contain',
+       'thumbnail_method' => 'contain',
++      'chunking' => FALSE,
++      'force_chunking' => FALSE,
++      'chunk_size' => 2000000,
++      'parallel_chunk_uploads' => FALSE,
++      'retry_chunks' => FALSE,
++      'retry_chunks_limit' => 3,
+     ]);
+   }
+ 
+@@ -166,6 +172,7 @@ class DropzoneJsEbWidget extends WidgetBase {
+       '#extensions' => $config['settings']['extensions'],
+       '#max_files' => ($cardinality > 0) ? $cardinality : 0,
+       '#clientside_resize' => $config['settings']['clientside_resize'],
++      '#chunking' => $config['settings']['chunking'],
+     ];
+ 
+     if ($config['settings']['clientside_resize']) {
+@@ -176,6 +183,14 @@ class DropzoneJsEbWidget extends WidgetBase {
+       $form['upload']['#thumbnail_method'] = $config['settings']['thumbnail_method'];
+     }
+ 
++    if ($config['settings']['chunking']) {
++      $form['upload']['#force_chunking'] = $config['settings']['force_chunking'];
++      $form['upload']['#chunk_size'] = $config['settings']['chunk_size'];
++      $form['upload']['#parallel_chunk_uploads'] = $config['settings']['parallel_chunk_uploads'];
++      $form['upload']['#retry_chunks'] = $config['settings']['retry_chunks'];
++      $form['upload']['#retry_chunks_limit'] = $config['settings']['retry_chunks_limit'];
++    }
++
+     $form['#attached']['library'][] = 'dropzonejs/widget';
+     // Disable the submit button until the upload sucesfully completed.
+     $form['#attached']['library'][] = 'dropzonejs_eb_widget/common';
+@@ -510,6 +525,78 @@ class DropzoneJsEbWidget extends WidgetBase {
+       ]
+     ];
+ 
++    $form['chunking'] = [
++      '#type' => 'checkbox',
++      '#title' => $this->t('Enable chunking'),
++      '#default_value' => $configuration['chunking'],
++    ];
++
++    $form['force_chunking'] = [
++      '#type' => 'checkbox',
++      '#title' => $this->t('Force chunking'),
++      '#default_value' => $configuration['force_chunking'],
++      '#states' => [
++        'visible' => [
++          ':input[name="table[' . $this->uuid() .  '][form][chunking]"]' => [
++            'checked' => TRUE,
++          ],
++        ],
++      ],
++    ];
++
++    $form['chunk_size'] = [
++      '#type' => 'number',
++      '#title' => $this->t('Chunk size'),
++      '#default_value' => $configuration['chunk_size'],
++      '#min' => 1,
++      '#states' => [
++        'visible' => [
++          ':input[name="table[' . $this->uuid() .  '][form][chunking]"]' => [
++            'checked' => TRUE,
++          ],
++        ],
++      ],
++    ];
++
++    $form['parallel_chunk_uploads'] = [
++      '#type' => 'checkbox',
++      '#title' => $this->t('Parallel chunk uploads'),
++      '#default_value' => $configuration['parallel_chunk_uploads'],
++      '#states' => [
++        'visible' => [
++          ':input[name="table[' . $this->uuid() .  '][form][chunking]"]' => [
++            'checked' => TRUE,
++          ],
++        ],
++      ],
++    ];
++
++    $form['retry_chunks'] = [
++      '#type' => 'checkbox',
++      '#title' => $this->t('Retry chunks'),
++      '#default_value' => $configuration['retry_chunks'],
++      '#states' => [
++        'visible' => [
++          ':input[name="table[' . $this->uuid() .  '][form][chunking]"]' => [
++            'checked' => TRUE,
++          ],
++        ],
++      ],
++    ];
++
++    $form['retry_chunks_limit'] = [
++      '#type' => 'number',
++      '#title' => $this->t('Retry chunks limit'),
++      '#default_value' => $configuration['retry_chunks_limit'],
++      '#states' => [
++        'visible' => [
++          ':input[name="table[' . $this->uuid() .  '][form][chunking]"]' => [
++            'checked' => TRUE,
++          ],
++        ],
++      ],
++    ];
++
+     return $form;
+   }
+ 
+diff --git a/src/ChunkedUploadHandler.php b/src/ChunkedUploadHandler.php
+new file mode 100644
+index 0000000..4430c46
+--- /dev/null
++++ b/src/ChunkedUploadHandler.php
+@@ -0,0 +1,180 @@
++<?php
++
++namespace Drupal\dropzonejs;
++
++use Drupal\Component\Transliteration\TransliterationInterface;
++use Drupal\Core\Config\ConfigFactoryInterface;
++use Drupal\Core\File\FileSystemInterface;
++use Drupal\Core\Language\LanguageManagerInterface;
++use Symfony\Component\HttpFoundation\File\UploadedFile;
++use Symfony\Component\HttpFoundation\RequestStack;
++
++/**
++ * Handles chunked files uploaded by Dropzone.
++ *
++ * The uploaded file will be stored in the configured tmp folder and will be
++ * added a chunk indentifier. Further filename processing will be
++ * done in Drupal\dropzonejs\Element::valueCallback. This means that the final
++ * filename will be provided only after that callback.
++ */
++class ChunkedUploadHandler extends UploadHandler {
++
++  /**
++   * The file system service.
++   *
++   * @var \Drupal\Core\File\FileSystemInterface
++   */
++  protected $fileSystem;
++
++  /**
++   * Constructs dropzone upload controller route controller.
++   *
++   * @param \Symfony\Component\HttpFoundation\RequestStack $request_stack
++   *   The request stack.
++   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   *   Config factory.
++   * @param \Drupal\Component\Transliteration\TransliterationInterface $transliteration
++   *   Transliteration service.
++   * @param \Drupal\Core\Language\LanguageManagerInterface $language_manager
++   *   LanguageManager service.
++   * @param \Drupal\Core\File\FileSystemInterface $file_system
++   *   The file system service.
++   */
++  public function __construct(RequestStack $request_stack, ConfigFactoryInterface $config_factory, TransliterationInterface $transliteration, LanguageManagerInterface $language_manager, FileSystemInterface $file_system) {
++    parent::__construct($request_stack, $config_factory, $transliteration, $language_manager);
++    $this->fileSystem = $file_system;
++  }
++
++  /**
++   * Get the path of the chunks temporary directory.
++   *
++   * @param string $uuid
++   *   The uuid of the Dropzone chunked file upload.
++   *
++   * @return string
++   *   The chunks temporary directory path.
++   */
++  public function getChunksDirectory($uuid) {
++    return $this->dropzoneSettings->get('tmp_upload_scheme') . '://' . $uuid;
++  }
++
++  /**
++   * Get a chunk's filename.
++   *
++   * @param string $original_name
++   *   The original name of the uploaded file.
++   * @param int $chunk_index
++   *   The chunk's index.
++   *
++   * @return string
++   *   The chunk's filename.
++   */
++  public function getChunkFilename($original_name, $chunk_index) {
++    $filename = $this->getFilename($original_name);
++    return "{$filename}.part{$chunk_index}";
++  }
++
++  /**
++   * {@inheritdoc}
++   */
++  public function handleUpload(UploadedFile $file) {
++    if (!$this->request->request->has('dzuuid')) {
++      // This is not a chunked upload.
++      return parent::handleUpload($file);
++    }
++
++    $error = $file->getError();
++    if ($error != UPLOAD_ERR_OK) {
++      // Check for file upload errors and return FALSE for this file if a lower
++      // level system error occurred. For a complete list of errors:
++      // See http://php.net/manual/features.file-upload.errors.php.
++      switch ($error) {
++        case UPLOAD_ERR_INI_SIZE:
++        case UPLOAD_ERR_FORM_SIZE:
++          $message = $this->t('The file could not be saved because it exceeds the maximum allowed size for uploads.');
++          break;
++
++        case UPLOAD_ERR_PARTIAL:
++        case UPLOAD_ERR_NO_FILE:
++          $message = $this->t('The file could not be saved because the upload did not complete.');
++          break;
++
++        // Unknown error.
++        default:
++          $message = $this->t('The file could not be saved. An unknown error has occurred.');
++          break;
++      }
++
++      throw new UploadException(UploadException::FILE_UPLOAD_ERROR, $message);
++    }
++
++    $uuid = $this->request->request->get('dzuuid');
++    $chunk_index = $this->request->request->getInt('dzchunkindex');
++    $chunks_directory = $this->getChunksDirectory($uuid);
++    $destination = $chunks_directory . '/' . $this->getChunkFilename($file->getClientOriginalName(), $chunk_index);
++
++    // Prepere directory.
++    if (!$this->fileSystem->prepareDirectory($chunks_directory, FileSystemInterface::CREATE_DIRECTORY | FileSystemInterface::MODIFY_PERMISSIONS)) {
++      throw new UploadException(UploadException::OUTPUT_ERROR);
++    }
++
++    // Move uploaded chunk to the chunks directory.
++    if (!$this->fileSystem->moveUploadedFile($file->getFileInfo()->getRealPath(), $destination)) {
++      throw new UploadException(UploadException::OUTPUT_ERROR);
++    }
++
++    return $destination;
++  }
++
++  /**
++   * Handles chunks assembling.
++   *
++   * @return string
++   *   URI of the assembled file.
++   *
++   * @throws \Drupal\dropzonejs\UploadException
++   */
++  public function assembleChunks() {
++    $filename = $this->request->request->get('filename');
++    $uuid = $this->request->request->get('dzuuid');
++    $total_size = $this->request->request->getInt('dztotalfilesize');
++    $total_chunk_count = $this->request->request->getInt('dztotalchunkcount');
++
++    $chunks_directory = $this->getChunksDirectory($uuid);
++
++    // Open temp file.
++    $tmp = $this->dropzoneSettings->get('tmp_upload_scheme') . '://' . $this->getFilename($filename);
++    if (!($out = fopen($tmp, $this->request->request->get('chunk', 0) ? 'ab' : 'wb'))) {
++      throw new UploadException(UploadException::OUTPUT_ERROR);
++    }
++
++    // Assemble chunks.
++    for ($i = 0; $i < $total_chunk_count; $i++) {
++      // Read binary input stream from chunk.
++      $chunk_uri = $chunks_directory . '/' . $this->getChunkFilename($filename, $i);
++      if (!($in = fopen($chunk_uri, 'rb'))) {
++        throw new UploadException(UploadException::INPUT_ERROR);
++      }
++
++      // Append input stream to temp file.
++      while ($buff = fread($in, 4096)) {
++        fwrite($out, $buff);
++      }
++
++      fclose($in);
++    }
++
++    fclose($out);
++
++    // Delete the chunk files and directory.
++    $this->fileSystem->deleteRecursive($chunks_directory);
++
++    // Check that the assembled file has the correct filesize.
++    if (filesize($tmp) !== $total_size) {
++      throw new UploadException(UploadException::ASSEMBLE_CHUNKS_ERROR);
++    }
++
++    return $tmp;
++  }
++
++}
+diff --git a/src/Controller/ChunkedUploadController.php b/src/Controller/ChunkedUploadController.php
+new file mode 100644
+index 0000000..aedc053
+--- /dev/null
++++ b/src/Controller/ChunkedUploadController.php
+@@ -0,0 +1,51 @@
++<?php
++
++namespace Drupal\dropzonejs\Controller;
++
++use Drupal\Core\Ajax\AjaxResponse;
++use Drupal\dropzonejs\UploadException;
++use Symfony\Component\DependencyInjection\ContainerInterface;
++use Symfony\Component\HttpKernel\Exception\AccessDeniedHttpException;
++
++/**
++ * Handles requests that dropzone issues when uploading files.
++ */
++class ChunkedUploadController extends UploadController {
++
++  /**
++   * {@inheritdoc}
++   */
++  public static function create(ContainerInterface $container) {
++    return new static(
++      $container->get('dropzonejs.chunked_upload_handler'),
++      $container->get('request_stack')->getCurrentRequest()
++    );
++  }
++
++  /**
++   * Finalize a chunked upload.
++   */
++  public function finalizeUpload() {
++    if (
++      !$this->request->request->has('filename') ||
++      !$this->request->request->has('dzuuid') ||
++      !$this->request->request->has('dztotalfilesize') ||
++      !$this->request->request->has('dztotalchunkcount')
++    ) {
++      throw new AccessDeniedHttpException();
++    }
++
++    try {
++      // Return JSON-RPC response.
++      return new AjaxResponse([
++        'jsonrpc' => '2.0',
++        'result' => basename($this->uploadHandler->assembleChunks()),
++        'id' => 'id',
++      ]);
++    }
++    catch (UploadException $e) {
++      return $e->getErrorResponse();
++    }
++  }
++
++}
+diff --git a/src/Element/DropzoneJs.php b/src/Element/DropzoneJs.php
+index 298b29e..c318b3b 100644
+--- a/src/Element/DropzoneJs.php
++++ b/src/Element/DropzoneJs.php
+@@ -34,6 +34,9 @@ use Drupal\Core\Url;
+  * - #clientside_resize (bool)
+  *   Whether or not to use DropzoneJS clientside resizing. It requires v4.4.0+
+  *   version of the library.
++ * - #chunking (bool)
++ *   Whether or not to use DropzoneJS chunking. It requires v5.7.0+
++ *   version of the library.
+  *
+  * Optional options are:
+  * - #resize_width (integer)
+@@ -49,6 +52,20 @@ use Drupal\Core\Url;
+  * - #thumbnail_method (string).
+  *   (optional) Accepts 'contain', which scales the image, or 'crop' which crops
+  *   the image. Defaults to 'contain'.
++ * - #force_chunking (bool).
++ *   (optional) Whether or not to force chunking even if the file size is below
++ *   chunk_size. Defaults to false.
++ * - #chunk_size (integer).
++ *   (optional) The chunk size in bytes. Defaults to 2000000.
++ * - #parallel_chunk_uploads (bool).
++ *   (optional) Whether or not individual chunks of a file can be uplaoded
++ *   in parallel. Defaults to false.
++ * - #retry_chunks (bool).
++ *   (optional) Whether or not a chunk should be retried if it fails.
++ *   Defaults to false.
++ * - #retry_chunks_limit (integer).
++ *   (optional) The number of times a chunk should be retried.
++ *   Defaults to 3.
+  *
+  * @todo Not sure about the version for clientside.
+  *
+@@ -95,6 +112,17 @@ class DropzoneJs extends FormElement {
+       // yet. So we pass this information through a data attribute.
+       '#attributes' => ['data-upload-path' => $generated_url->getGeneratedUrl()],
+     ];
++
++    // If we send a url with a token through drupalSettings the placeholder
++    // doesn't get replaced, because the actual scripts markup is not there
++    // yet. So we pass this information through a data attribute.
++    if (!empty($element['#chunking'])) {
++      $element['uploaded_files']['#attributes'] = [
++        'data-upload-path' => Url::fromRoute('dropzonejs.chunked.upload')->toString(),
++        'data-finalize-path' => Url::fromRoute('dropzonejs.chunked.finalize')->toString(),
++      ];
++    }
++
+     // Apply cacheable metadata to element.
+     $generated_url->applyTo($element);
+     if (empty($element['#max_filesize'])) {
+diff --git a/src/UploadException.php b/src/UploadException.php
+index bb5a533..335c657 100644
+--- a/src/UploadException.php
++++ b/src/UploadException.php
+@@ -39,6 +39,11 @@ class UploadException extends \Exception {
+    */
+   const FILE_UPLOAD_ERROR = 106;
+ 
++  /**
++   * Chunks assembly resulted in error.
++   */
++  const ASSEMBLE_CHUNKS_ERROR = 107;
++
+   /**
+    * Code to error message mapping.
+    *
+@@ -51,6 +56,7 @@ class UploadException extends \Exception {
+     self::DESTINATION_FOLDER_ERROR => 'Failed to open temporary directory for write.',
+     self::FILENAME_ERROR => 'Invalid temporary file name.',
+     self::FILE_UPLOAD_ERROR => 'The file upload resulted in an error on php level. See http://php.net/manual/en/features.file-upload.errors.php',
++    self::ASSEMBLE_CHUNKS_ERROR => 'Failed to assemble chunks.',
+   ];
+ 
+   /**
+diff --git a/src/UploadHandler.php b/src/UploadHandler.php
+index 093845e..320ebab 100644
+--- a/src/UploadHandler.php
++++ b/src/UploadHandler.php
+@@ -72,9 +72,7 @@ class UploadHandler implements UploadHandlerInterface {
+   /**
+    * {@inheritdoc}
+    */
+-  public function getFilename(UploadedFile $file) {
+-    $original_name = $file->getClientOriginalName();
+-
++  public function getFilename($original_name) {
+     // There should be a filename and it should not contain a semicolon,
+     // which we use to separate filenames.
+     if (!isset($original_name)) {
+@@ -138,7 +136,7 @@ class UploadHandler implements UploadHandlerInterface {
+     }
+ 
+     // Open temp file.
+-    $tmp = $this->dropzoneSettings->get('tmp_upload_scheme') . '://' . $this->getFilename($file);
++    $tmp = $this->dropzoneSettings->get('tmp_upload_scheme') . '://' . $this->getFilename($file->getClientOriginalName());
+     if (!($out = fopen($tmp, $this->request->request->get('chunk', 0) ? 'ab' : 'wb'))) {
+       throw new UploadException(UploadException::OUTPUT_ERROR);
+     }
+diff --git a/src/UploadHandlerInterface.php b/src/UploadHandlerInterface.php
+index d4a196c..f6cd8e8 100644
+--- a/src/UploadHandlerInterface.php
++++ b/src/UploadHandlerInterface.php
+@@ -10,17 +10,17 @@ use Symfony\Component\HttpFoundation\File\UploadedFile;
+ interface UploadHandlerInterface {
+ 
+   /**
+-   * Reads, checks and return filename of a file being uploaded.
++   * Sanitizes the filename of the uploaded file.
+    *
+-   * @param \Symfony\Component\HttpFoundation\File\UploadedFile $file
+-   *   An instance of UploadedFile.
++   * @param string $original_name
++   *   The original filename.
+    *
+    * @return string
+    *   The sanitized filename.
+    *
+    * @throws \Drupal\dropzonejs\UploadException
+    */
+-  public function getFilename(UploadedFile $file);
++  public function getFilename($original_name);
+ 
+   /**
+    * Handles an uploaded file.
+diff --git a/tests/modules/dropzonejs_test/config/install/entity_browser.browser.dropzonejs_eb_test.yml b/tests/modules/dropzonejs_test/config/install/entity_browser.browser.dropzonejs_eb_test.yml
+index 8c0fd40..6e60152 100644
+--- a/tests/modules/dropzonejs_test/config/install/entity_browser.browser.dropzonejs_eb_test.yml
++++ b/tests/modules/dropzonejs_test/config/install/entity_browser.browser.dropzonejs_eb_test.yml
+@@ -32,6 +32,12 @@ widgets:
+       resize_quality: !!float 1
+       resize_method: contain
+       thumbnail_method: contain
++      chunking: false
++      force_chunking: false
++      chunk_size: 2000000
++      parallel_chunk_uploads: false
++      retry_chunks: false
++      retry_chunks_limit: 3
+       submit_text: 'Select entities'
+       auto_select: false
+     uuid: 44b1e6ea-637d-4dd6-b79e-edeefc546c1c
