@@ -1,0 +1,36 @@
+diff --git a/dist/css/base/gin.css b/dist/css/base/gin.css
+index 85d6c61..9ef47ba 100644
+--- a/dist/css/base/gin.css
++++ b/dist/css/base/gin.css
+@@ -2577,6 +2577,7 @@ td.webform-has-field-suffix > .form-item > .form-element {
+ 
+ .form-boolean--type-radio:checked:not(:disabled):active, .form-boolean--type-radio:checked:not(:disabled):focus, .form-boolean--type-radio:checked:not(:disabled):hover:focus {
+   box-shadow: inset 0 0 0 5px var(--colorGinPrimary), 0 0 0 1px var(--colorGinFocusBorder), 0 0 0 4px var(--colorGinFocus);
++  border-color: var(--colorGinFocusBorder);
+ }
+ 
+ .form-boolean--type-radio:checked:disabled, .form-boolean--type-radio:checked:disabled:hover {
+diff --git a/dist/css/theme/dialog.css b/dist/css/theme/dialog.css
+index 81c7b20..36f1437 100644
+--- a/dist/css/theme/dialog.css
++++ b/dist/css/theme/dialog.css
+@@ -598,6 +598,7 @@
+ 
+ .ui-dialog .form-boolean--type-radio:checked:not(:disabled):active, .ui-dialog .form-boolean--type-radio:checked:not(:disabled):focus, .ui-dialog .form-boolean--type-radio:checked:not(:disabled):hover:focus {
+   box-shadow: inset 0 0 0 5px var(--colorGinPrimary), 0 0 0 1px var(--colorGinFocusBorder), 0 0 0 4px var(--colorGinFocus);
++  border-color: var(--colorGinFocusBorder);
+ }
+ 
+ .ui-dialog .form-boolean--type-radio:checked:disabled, .ui-dialog .form-boolean--type-radio:checked:disabled:hover {
+diff --git a/styles/base/_form.scss b/styles/base/_form.scss
+index b999ffe..1d579b7 100644
+--- a/styles/base/_form.scss
++++ b/styles/base/_form.scss
+@@ -298,6 +298,7 @@ $maxWidth: 520px;
+       box-shadow: inset 0 0 0 5px var(--colorGinPrimary),
+                   0 0 0 1px var(--colorGinFocusBorder),
+                   0 0 0 4px var(--colorGinFocus);
++      border-color: var(--colorGinFocusBorder);
+     }
+   }
+ 
