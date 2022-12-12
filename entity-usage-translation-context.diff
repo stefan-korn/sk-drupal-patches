@@ -1,0 +1,13 @@
+diff --git a/src/Controller/ListUsageController.php b/src/Controller/ListUsageController.php
+index 038a7fa..279d2cc 100644
+--- a/src/Controller/ListUsageController.php
++++ b/src/Controller/ListUsageController.php
+@@ -126,7 +126,7 @@ class ListUsageController extends ControllerBase {
+     }
+ 
+     $header = [
+-      $this->t('Entity'),
++      $this->t('Entity', [], ['context' => 'Entity Usage']),
+       $this->t('Type'),
+       $this->t('Language'),
+       $this->t('Field name'),
