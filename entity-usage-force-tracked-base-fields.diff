@@ -1,0 +1,72 @@
+diff --git a/config/schema/entity_usage.schema.yml b/config/schema/entity_usage.schema.yml
+index 3c5c894..48a7d60 100644
+--- a/config/schema/entity_usage.schema.yml
++++ b/config/schema/entity_usage.schema.yml
+@@ -24,6 +24,11 @@ entity_usage.settings:
+     track_enabled_base_fields:
+       type: boolean
+       label: Track referencing base fields
++    forced_base_fields:
++      label: Base fields that are forced for tracking
++      type: sequence
++      sequence:
++        type: string
+     site_domains:
+       label: Domains for this website
+       type: sequence
+diff --git a/src/EntityUsageTrackBase.php b/src/EntityUsageTrackBase.php
+index 61c6f43..eabcb35 100644
+--- a/src/EntityUsageTrackBase.php
++++ b/src/EntityUsageTrackBase.php
+@@ -262,9 +262,12 @@ abstract class EntityUsageTrackBase extends PluginBase implements EntityUsageTra
+     }
+ 
+     if (!$this->config->get('track_enabled_base_fields')) {
++      $forced_base_fields = $this->config->get('forced_base_fields') ?? [];
+       foreach ($referencing_fields_on_bundle as $key => $referencing_field_on_bundle) {
+         if ($referencing_field_on_bundle->getFieldStorageDefinition()->isBaseField()) {
+-          unset($referencing_fields_on_bundle[$key]);
++          if (!in_array($source_entity->getEntityTypeId().':'.$key, $forced_base_fields)) {
++            unset($referencing_fields_on_bundle[$key]);
++          }
+         }
+       }
+     }
+diff --git a/src/Form/EntityUsageSettingsForm.php b/src/Form/EntityUsageSettingsForm.php
+index 94faf65..6bf9496 100644
+--- a/src/Form/EntityUsageSettingsForm.php
++++ b/src/Form/EntityUsageSettingsForm.php
+@@ -245,6 +245,15 @@ class EntityUsageSettingsForm extends ConfigFormBase {
+       '#description' => $this->t('If enabled, relationships generated through non-configurable fields (basefields) will also be tracked.'),
+       '#default_value' => (bool) $config->get('track_enabled_base_fields'),
+     ];
++    $form['generic_settings']['forced_base_fields'] = [
++      '#type' => 'textarea',
++      '#title' => $this->t('Forced based fields'),
++      '#description' => $this->t("A comma or new-line separated list of forced base fields (entity_type:field_name)."),
++      '#default_value' => implode("\r\n", $config->get('forced_base_fields') ?: []),
++      '#states' => [
++        'visible' => [':input[name="track_enabled_base_fields"]' => ['checked' => FALSE],]
++      ]
++    ];
+     $form['generic_settings']['site_domains'] = [
+       '#type' => 'textarea',
+       '#title' => $this->t('Domains for this website'),
+@@ -275,6 +284,9 @@ class EntityUsageSettingsForm extends ConfigFormBase {
+     $site_domains = preg_replace('/[\s, ]/', ',', $form_state->getValue('site_domains'));
+     $site_domains = array_values(array_filter(explode(',', $site_domains)));
+ 
++    $forced_base_fields = preg_replace('/[\s, ]/', ',', $form_state->getValue('forced_base_fields'));
++    $forced_base_fields = array_values(array_filter(explode(',', $forced_base_fields)));
++
+     $config->set('track_enabled_base_fields', (bool) $form_state->getValue('track_enabled_base_fields'))
+       ->set('local_task_enabled_entity_types', array_values(array_filter($form_state->getValue('local_task_enabled_entity_types')['entity_types'])))
+       ->set('track_enabled_source_entity_types', array_values(array_filter($form_state->getValue('track_enabled_source_entity_types')['entity_types'])))
+@@ -282,6 +294,7 @@ class EntityUsageSettingsForm extends ConfigFormBase {
+       ->set('edit_warning_message_entity_types', array_values(array_filter($form_state->getValue('edit_warning_message_entity_types')['entity_types'])))
+       ->set('delete_warning_message_entity_types', array_values(array_filter($form_state->getValue('delete_warning_message_entity_types')['entity_types'])))
+       ->set('track_enabled_plugins', array_values(array_filter($form_state->getValue('track_enabled_plugins')['plugins'])))
++      ->set('forced_base_fields', $forced_base_fields)
+       ->set('site_domains', $site_domains)
+       ->set('usage_controller_items_per_page', $form_state->getValue('usage_controller_items_per_page'))
+       ->save();
