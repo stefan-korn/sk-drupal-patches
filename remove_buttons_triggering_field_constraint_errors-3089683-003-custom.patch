@@ -1,0 +1,16 @@
+diff --git a/src/Plugin/Field/FieldWidget/EntityReferenceBrowserWidget.php b/src/Plugin/Field/FieldWidget/EntityReferenceBrowserWidget.php
+index 42c9da7..854f21a 100644
+--- a/src/Plugin/Field/FieldWidget/EntityReferenceBrowserWidget.php
++++ b/src/Plugin/Field/FieldWidget/EntityReferenceBrowserWidget.php
+@@ -350,6 +350,11 @@ class EntityReferenceBrowserWidget extends WidgetBase implements ContainerFactor
+           ));
+         }
+       }
++      // if triggered by remove button, no errors should be flagged
++      $trigger = $form_state->getTriggeringElement();
++      if (end($trigger['#parents']) === 'remove_button') {
++        $violations = new ConstraintViolationList();
++      }
+     }
+ 
+     parent::flagErrors($items, $violations, $form, $form_state);
