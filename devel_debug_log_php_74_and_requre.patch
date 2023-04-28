@@ -1,0 +1,44 @@
+diff --git a/composer.json b/composer.json
+index 508717e..55d5991 100644
+--- a/composer.json
++++ b/composer.json
+@@ -12,7 +12,7 @@
+         "drupal/devel": "Some modules will be able to pretty-print PHP with this module."
+     },
+     "license": "GPL-2.0+",
+-    "require-dev": {
++    "require": {
+         "drupal/devel": "^5.1",
+         "kint-php/kint": "^4"
+     }
+diff --git a/devel_debug_log.module b/devel_debug_log.module
+index de90c40..83c8aa2 100644
+--- a/devel_debug_log.module
++++ b/devel_debug_log.module
+@@ -28,7 +28,7 @@ use Kint\Renderer\RichRenderer;
+  * @return void
+  * @throws \Exception
+  */
+-function ddl(mixed $message, string $title = ''): void {
++function ddl($message, string $title = ''): void {
+   $serialized = FALSE;
+   $message = devel_debug_log_ob_kint($message);
+   // TODO Find a way to store the initial message, instead of storing the entire
+@@ -59,7 +59,7 @@ function ddl(mixed $message, string $title = ''): void {
+  * @return void
+  * @throws \Exception
+  */
+-function ddl_once(mixed $message, string $title = ''): void {
++function ddl_once($message, string $title = ''): void {
+   $message_history = &drupal_static(__FUNCTION__);
+ 
+   if (!is_resource($message)) {
+@@ -101,7 +101,7 @@ function devel_debug_log_theme(array &$cache, $type, $theme, $path): array {
+  * @return string
+  *  The debug information.
+  */
+-function devel_debug_log_ob_kint(mixed $message): string {
++function devel_debug_log_ob_kint($message): string {
+   ob_start();
+   if (PHP_SAPI === 'cli') {
+     Kint::$enabled_mode = Kint::MODE_RICH;
