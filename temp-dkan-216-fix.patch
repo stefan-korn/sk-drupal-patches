@@ -1,0 +1,133 @@
+diff --git a/modules/common/src/Storage/AbstractDatabaseTable.php b/modules/common/src/Storage/AbstractDatabaseTable.php
+index 9d94c88d2..f039c5a11 100644
+--- a/modules/common/src/Storage/AbstractDatabaseTable.php
++++ b/modules/common/src/Storage/AbstractDatabaseTable.php
+@@ -190,7 +190,7 @@ abstract class AbstractDatabaseTable implements DatabaseTableInterface {
+    */
+   public function remove(string $id) {
+     $tableName = $this->getTableName();
+-    $this->connection->delete($tableName)
++    return $this->connection->delete($tableName)
+       ->condition($this->primaryKey(), $id)
+       ->execute();
+   }
+diff --git a/modules/datastore/src/Form/DashboardForm.php b/modules/datastore/src/Form/DashboardForm.php
+index 2b5d72992..156741a18 100644
+--- a/modules/datastore/src/Form/DashboardForm.php
++++ b/modules/datastore/src/Form/DashboardForm.php
+@@ -302,7 +302,14 @@ class DashboardForm extends FormBase {
+       // Gather dataset information.
+       $datasetInfo = $this->datasetInfo->gather($datasetId);
+       if (empty($datasetInfo['latest_revision'])) {
+-        continue;
++        $datasetInfo = [
++          'latest_revision' => [
++            'uuid' => $datasetId,
++            'revision_id' => $datasetInfo['notice']
++          ]
++        ];
++        //continue;
++
+       }
+       // Build a table row using it's details and harvest status.
+       $datasetRow = $this->buildRevisionRows($datasetInfo, $harvestLoad[$datasetId] ?? 'N/A');
+@@ -378,7 +385,7 @@ class DashboardForm extends FormBase {
+     // Create a row for each dataset revision (there could be both a published
+     // and latest).
+     foreach (array_values($datasetInfo) as $rev) {
+-      $distributions = $rev['distributions'];
++      $distributions = $rev['distributions'] ?? [];
+       // For first distribution, combine with revision information.
+       $rows[] = array_merge(
+         $this->buildRevisionRow($rev, count($distributions), $harvestStatus),
+@@ -409,7 +416,7 @@ class DashboardForm extends FormBase {
+   protected function buildRevisionRow(array $rev, int $resourceCount, string $harvestStatus) {
+     return [
+       [
+-        'rowspan' => $resourceCount,
++        'rowspan' => $resourceCount !== 0 ? $resourceCount : 1,
+         'data' => [
+           '#theme' => 'datastore_dashboard_dataset_cell',
+           '#uuid' => $rev['uuid'],
+@@ -418,17 +425,17 @@ class DashboardForm extends FormBase {
+         ],
+       ],
+       [
+-        'rowspan' => $resourceCount,
++        'rowspan' => $resourceCount !== 0 ? $resourceCount : 1,
+         'class' => $rev['moderation_state'],
+         'data' => [
+           '#theme' => 'datastore_dashboard_revision_cell',
+           '#revision_id' => $rev['revision_id'],
+-          '#modified' => $this->dateFormatter->format(strtotime($rev['modified_date_dkan']), 'short'),
++          '#modified' => !empty($rev['modified_date_dkan']) ? $this->dateFormatter->format(strtotime($rev['modified_date_dkan']), 'short') : '',
+           '#moderation_state' => $rev['moderation_state'],
+         ],
+       ],
+       [
+-        'rowspan' => $resourceCount,
++        'rowspan' => $resourceCount !== 0 ? $resourceCount : 1,
+         'data' => $harvestStatus,
+         'class' => strtolower($harvestStatus),
+       ],
+diff --git a/modules/harvest/src/Commands/HarvestCommands.php b/modules/harvest/src/Commands/HarvestCommands.php
+index d2808471e..e62771e08 100644
+--- a/modules/harvest/src/Commands/HarvestCommands.php
++++ b/modules/harvest/src/Commands/HarvestCommands.php
+@@ -126,13 +126,22 @@ class HarvestCommands extends DrushCommands {
+    * @command dkan:harvest:deregister
+    */
+   public function deregister($id) {
+-    try {
+-      if ($this->harvestService->deregisterHarvest($id)) {
+-        $message = "Successfully deregistered the {$id} harvest.";
++    $this->logger->warning('If you deregister a harvest with published datasets, you will not be able to bulk revert the datasets connected to this harvest.');
++    if ($this->io()->confirm("Deregister harvest {$id}")) {
++      try {
++        if ($this->harvestService->deregisterHarvest($id)) {
++          $message = "Successfully deregistered the {$id} harvest.";
++        }
++        else {
++          $message = "No harvest {$id} deregistered. Check if it exists.";
++        }
++      }
++      catch (\Exception $e) {
++        $message = $e->getMessage();
+       }
+     }
+-    catch (\Exception $e) {
+-      $message = $e->getMessage();
++    else {
++      $message = "Skipped deregistering harvest {$id}";
+     }
+ 
+     (new ConsoleOutput())->write($message . PHP_EOL);
+diff --git a/modules/harvest/src/Commands/Helper.php b/modules/harvest/src/Commands/Helper.php
+index c39d265b4..9b8819d7a 100644
+--- a/modules/harvest/src/Commands/Helper.php
++++ b/modules/harvest/src/Commands/Helper.php
+@@ -104,7 +104,7 @@ trait Helper {
+       $table->setHeaders(["item_id", "extract", "transform", "load"]);
+ 
+       foreach ($run['status']['extracted_items_ids'] as $item_id) {
+-        $row = $this->generateItemStatusRow($item_id, $run['status'], $run['errors']);
++        $row = $this->generateItemStatusRow($item_id, $run['status'], $run['errors'] ?? []);
+         $table->addRow($row);
+       }
+ 
+diff --git a/modules/harvest/src/HarvestService.php b/modules/harvest/src/HarvestService.php
+index eeb6d145a..483ecb262 100644
+--- a/modules/harvest/src/HarvestService.php
++++ b/modules/harvest/src/HarvestService.php
+@@ -136,11 +136,6 @@ class HarvestService implements ContainerInjectionInterface {
+    *   Boolean.
+    */
+   public function deregisterHarvest(string $id) {
+-    try {
+-      $this->revertHarvest($id);
+-    }
+-    catch (\Exception $e) {
+-    }
+ 
+     $plan_store = $this->storeFactory->getInstance("harvest_plans");
+ 
