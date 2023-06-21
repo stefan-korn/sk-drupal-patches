@@ -1,0 +1,116 @@
+diff --git a/config/schema/yoast_seo.schema.yml b/config/schema/yoast_seo.schema.yml
+index edf4d1a..ffb0105 100644
+--- a/config/schema/yoast_seo.schema.yml
++++ b/config/schema/yoast_seo.schema.yml
+@@ -8,6 +8,9 @@ field.widget.settings.yoast_seo_widget:
+     edit-description:
+       type: boolean
+       label: 'Description Editing'
++    edit-manual-checking:
++      type: boolean
++      label: 'Manual checking'
+ 
+ yoast_seo.settings:
+   type: config_object
+diff --git a/js/yoast_seo.js b/js/yoast_seo.js
+index 077d70f..566889b 100644
+--- a/js/yoast_seo.js
++++ b/js/yoast_seo.js
+@@ -25,7 +25,7 @@
+ 
+       // Update the text fields behind the CKEditor when it changes.
+       // TODO: Incorporate this with the update event binder.
+-      if (typeof CKEDITOR !== 'undefined') {
++      if (!settings.yoast_seo.manual_checking && typeof CKEDITOR !== 'undefined') {
+         CKEDITOR.on('instanceReady', function (ev) {
+           // The editor that is now ready.
+           var editor = ev.editor;
+@@ -233,6 +233,10 @@
+    * needs to do the analysis.
+    */
+   Orchestrator.prototype.refreshData = function () {
++    if (this.config.is_new || this.config.manual_checking) {
++      return;
++    }
++
+     // We use Drupal's AJAX progress indicator to check that we're not
+     // interfering with an already running AJAX request. If an AJAX request is
+     // already running then we reschedule the update.
+diff --git a/src/Form/AnalysisFormHandler.php b/src/Form/AnalysisFormHandler.php
+index a09627b..6cd08c6 100644
+--- a/src/Form/AnalysisFormHandler.php
++++ b/src/Form/AnalysisFormHandler.php
+@@ -129,8 +129,6 @@ class AnalysisFormHandler implements EntityHandlerInterface {
+       '#value' => t('Seo preview'),
+       '#attributes' => [
+         'class' => ['yoast-seo-preview-submit-button'],
+-        // Inline styles are bad but we can't reliably use class order here.
+-        'style' => 'display: none',
+       ],
+       '#ajax' => [
+         'callback' => [$this, 'analysisSubmitAjax'],
+@@ -141,6 +139,11 @@ class AnalysisFormHandler implements EntityHandlerInterface {
+       // processed by analysisSubmitAjax callback.
+       '#validate' => [[$this, 'cacheProcessedEntityForPreview']],
+     ];
++
++    if (empty($element['#manual_checking'])) {
++      // Inline styles are bad but we can't reliably use class order here.
++      $element['#attributes']['style'] = 'display: none';
++    }
+   }
+ 
+   /**
+diff --git a/src/Plugin/Field/FieldWidget/YoastSeoWidget.php b/src/Plugin/Field/FieldWidget/YoastSeoWidget.php
+index 9694790..10b98c3 100644
+--- a/src/Plugin/Field/FieldWidget/YoastSeoWidget.php
++++ b/src/Plugin/Field/FieldWidget/YoastSeoWidget.php
+@@ -103,6 +103,7 @@ class YoastSeoWidget extends WidgetBase implements ContainerFactoryPluginInterfa
+           'yoast_seo/yoast_seo_admin',
+         ],
+       ],
++      '#manual_checking' => $this->getSetting('edit_manual_checking'),
+     ];
+ 
+     $element['focus_keyword'] = [
+@@ -196,6 +197,7 @@ class YoastSeoWidget extends WidgetBase implements ContainerFactoryPluginInterfa
+     return [
+       'edit_title' => FALSE,
+       'edit_description' => FALSE,
++      'edit_manual_checking' => FALSE,
+       'render_theme' => NULL,
+       'render_view_mode' => 'default',
+     ] + parent::defaultSettings();
+@@ -251,6 +253,13 @@ class YoastSeoWidget extends WidgetBase implements ContainerFactoryPluginInterfa
+       '#default_value' => $this->getSetting('render_view_mode'),
+     ];
+ 
++    $form['edit_manual_checking'] = [
++      '#type' => 'checkbox',
++      '#title' => $this->t('Enable manual checking'),
++      '#description' => $this->t('When this is checked the SEO widget will not check automatically, but show a button to do the check manually.'),
++      '#default_value' => $this->getSetting('edit_manual_checking'),
++    ];
++
+     return $form;
+   }
+ 
+@@ -275,6 +284,10 @@ class YoastSeoWidget extends WidgetBase implements ContainerFactoryPluginInterfa
+ 
+     $summary[] = 'Analysing view mode: ' . $this->getSetting("render_view_mode");
+ 
++    if ($this->getSetting('edit_manual_checking')) {
++      $summary[] = $this->t('Manual checking enabled');
++    }
++
+     return $summary;
+   }
+ 
+@@ -301,6 +314,7 @@ class YoastSeoWidget extends WidgetBase implements ContainerFactoryPluginInterfa
+       'score_rules' => $score_rules,
+       // Possibly allow properties to be editable.
+       'enable_editing' => [],
++      'manual_checking' => $this->getSetting('edit_manual_checking'),
+     ];
+ 
+     foreach (['title', 'description'] as $property) {
