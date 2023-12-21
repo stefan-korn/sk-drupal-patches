@@ -1,0 +1,506 @@
+diff --git a/config/schema/entity_browser.schema.yml b/config/schema/entity_browser.schema.yml
+index 67a1d79..72017b7 100644
+--- a/config/schema/entity_browser.schema.yml
++++ b/config/schema/entity_browser.schema.yml
+@@ -176,6 +176,9 @@ field.widget.settings.entity_browser_entity_reference:
+     field_widget_edit:
+       type: boolean
+       label: 'Field widget edit'
++    field_widget_edit_form_mode:
++      type: string
++      label: 'Field widget edit form mode'
+     field_widget_remove:
+       type: boolean
+       label: 'Field widget remove'
+@@ -190,6 +193,9 @@ field.widget.settings.entity_browser_entity_reference:
+     selection_mode:
+       type: string
+       label: 'Selection mode'
++    show_messages:
++      type: boolean
++      label: 'Show messages'
+ 
+ entity_browser.field_widget_display.label:
+   type: mapping
+@@ -221,6 +227,9 @@ field.widget.settings.entity_browser_file:
+     field_widget_edit:
+       type: boolean
+       label: 'Field widget edit'
++    field_widget_edit_form_mode:
++      type: string
++      label: 'Field widget edit form mode'
+     field_widget_remove:
+       type: boolean
+       label: 'Field widget remove'
+diff --git a/entity_browser.module b/entity_browser.module
+index 67d956f..800dc4b 100644
+--- a/entity_browser.module
++++ b/entity_browser.module
+@@ -71,17 +71,23 @@ function entity_browser_theme() {
+  */
+ function entity_browser_form_alter(&$form, FormStateInterface &$form_state) {
+   $entity_browser_dialog_edit = \Drupal::service('request_stack')->getCurrentRequest()->get('_route');
+-  if ($entity_browser_dialog_edit == 'entity_browser.edit_form' && $form_state->getFormObject() instanceof EntityForm) {
++  $form_mode = \Drupal::service('request_stack')->getCurrentRequest()->get('form_mode');
++  if ($entity_browser_dialog_edit === 'entity_browser.edit_form' && $form_state->getFormObject() instanceof EntityForm) {
+     // Let's allow the save button only.
+     foreach (Element::children($form['actions']) as $key) {
+       $form['actions'][$key]['#access'] = $key == 'submit';
+     }
+     // Use Ajax.
+     $form['actions']['submit']['#ajax'] = [
+-      'url' => Url::fromRoute('entity_browser.edit_form', ['entity_type' => $form_state->getFormObject()->getEntity()->getEntityTypeId(), 'entity' => $form_state->getFormObject()->getEntity()->id()]),
++      'url' => Url::fromRoute('entity_browser.edit_form', [
++        'entity_type' => $form_state->getFormObject()->getEntity()->getEntityTypeId(),
++        'entity' => $form_state->getFormObject()->getEntity()->id(),
++        'form_mode' => $form_mode,
++      ]),
+       'options' => [
+         'query' => [
+           'details_id' => \Drupal::request()->query->get('details_id'),
++          'show_messages' => \Drupal::request()->query->get('show_messages'),
+         ],
+       ],
+       'disable-refocus' => TRUE,
+@@ -109,6 +115,31 @@ function entity_browser_preprocess_page__entity_browser__iframe(&$variables) {
+   }
+ }
+ 
++
++/**
++ * Implements hook_entity_type_build().
++ *
++ * Register all form modes for an entity_type.
++ *
++ * @param array $entity_types
++ *    Definition of all content entity types.
++ */
++function entity_browser_entity_type_build(array &$entity_types) {
++  // Manually load all form modes via configuration instead of using
++  // \Drupal::service('entity_display.repository')->getAllFormModes() because
++  // it also needs to ensure the entity types are loaded, which causes a
++  // circular loop and possible errors.
++  $form_mode_ids = \Drupal::configFactory()->listAll('core.entity_form_mode.');
++  $form_modes = \Drupal::configFactory()->loadMultiple($form_mode_ids);
++
++  foreach ($form_modes as $form_mode) {
++    [$entity_type, $form_mode_id] = explode('.', $form_mode->get('id'), 2);
++    if (isset($entity_types[$entity_type]) && $form_mode->get('status') && !$entity_types[$entity_type]->getFormClass($form_mode_id) && $class = $entity_types[$entity_type]->getFormClass('default')) {
++      $entity_types[$entity_type]->setFormClass($form_mode_id, $class);
++    }
++  }
++}
++
+ /**
+  * Implements hook_preprocess_page__entity_browser__modal().
+  *
+diff --git a/entity_browser.routing.yml b/entity_browser.routing.yml
+index 5f901ff..fb0cb04 100644
+--- a/entity_browser.routing.yml
++++ b/entity_browser.routing.yml
+@@ -2,9 +2,10 @@ route_callbacks:
+   - 'entity_browser.route_subscriber:routes'
+ 
+ entity_browser.edit_form:
+-  path: /entity_browser/{entity_type}/{entity}/edit
++  path: /entity_browser/{entity_type}/{entity}/edit/{form_mode}
+   defaults:
+     _controller: '\Drupal\entity_browser\Controllers\EntityBrowserController::entityBrowserEdit'
++    form_mode: 'default'
+   requirements:
+     _entity_access: 'entity.update'
+   options:
+diff --git a/src/Controllers/EntityBrowserController.php b/src/Controllers/EntityBrowserController.php
+index f0df5fb..af47ba2 100644
+--- a/src/Controllers/EntityBrowserController.php
++++ b/src/Controllers/EntityBrowserController.php
+@@ -8,6 +8,7 @@ use Drupal\Core\Ajax\CloseDialogCommand;
+ use Drupal\Core\Ajax\OpenDialogCommand;
+ use Drupal\Core\Controller\ControllerBase;
+ use Drupal\Core\Entity\EntityInterface;
++use Drupal\Core\Entity\Entity\EntityFormDisplay;
+ use Drupal\Core\Form\FormState;
+ use Drupal\entity_browser\Ajax\ValueUpdatedCommand;
+ use Symfony\Component\HttpFoundation\ParameterBag;
+@@ -23,6 +24,8 @@ class EntityBrowserController extends ControllerBase {
+    *
+    * @param \Drupal\Core\Entity\EntityInterface $entity
+    *   An entity being edited.
++   * @param string $form_mode
++   *   The form mode to use for the entity edit form.
+    * @param \Symfony\Component\HttpFoundation\Request $request
+    *   The currently processing request.
+    *
+@@ -30,10 +33,9 @@ class EntityBrowserController extends ControllerBase {
+    *   An Ajax response with a command for opening or closing the dialog
+    *   containing the edit form.
+    */
+-  public function entityBrowserEdit(EntityInterface $entity, Request $request) {
+-
++  public function entityBrowserEdit(EntityInterface $entity, string $form_mode, Request $request) {
+     $trigger_name = $request->request->get('_triggering_element_name');
+-    $edit_button = (strpos($trigger_name, 'edit_button') !== FALSE);
++    $edit_button = strpos($trigger_name, '_edit_button_') !== FALSE;
+ 
+     if ($edit_button) {
+       // Remove posted values from original form to prevent
+@@ -42,18 +44,14 @@ class EntityBrowserController extends ControllerBase {
+       $request->request = new ParameterBag();
+     }
+ 
+-    // Use edit form class if it exists, otherwise use default form class.
++    // Make sure the entity has an edit/default form class.
+     $entity_type = $entity->getEntityType();
+-    if ($entity_type->getFormClass('edit')) {
+-      $operation = 'edit';
+-    }
+-    elseif ($entity_type->getFormClass('default')) {
+-      $operation = 'default';
+-    }
++    if ($entity_type
++      ->getFormClass('edit') || $entity_type
++      ->getFormClass('default')) {
+ 
+-    if (!empty($operation)) {
+       // Build the entity edit form.
+-      $form_object = $this->entityTypeManager()->getFormObject($entity->getEntityTypeId(), $operation);
++      $form_object = $this->entityTypeManager()->getFormObject($entity->getEntityTypeId(), $form_mode);
+       $form_object->setEntity($entity);
+       $form_state = (new FormState())
+         ->setFormObject($form_object)
+@@ -65,14 +63,19 @@ class EntityBrowserController extends ControllerBase {
+     // Restore original request now that the edit form is built.
+     // This fixes a bug where closing modal and re-opening it would
+     // cause two modals to open.
+-    if ($edit_button) {
++    if (isset($original_request)) {
+       $request->request = $original_request;
+     }
+ 
+     // Return a response, depending on whether it's successfully submitted.
+-    if ($operation && $form_state && !$form_state->isExecuted()) {
++    if ($form_state && !$form_state->isExecuted()) {
+       // Return the form as a modal dialog.
+       $form['#attached']['library'][] = 'core/drupal.dialog.ajax';
++      $form['messages'] = [
++        '#type' => 'status_messages',
++        '#weight' => -10000,
++        '#access' => (bool) $this->messenger()->all(),
++      ];
+       $title = $this->t('Edit @entity', ['@entity' => $entity->label()]);
+       $response = (new AjaxResponse())->addCommand(new OpenDialogCommand('#' . $entity->getEntityTypeId() . '-' . $entity->id() . '-edit-dialog', $title, $form, ['modal' => TRUE, 'width' => '92%', 'dialogClass' => 'entity-browser-modal']));
+       return $response;
+@@ -82,11 +85,16 @@ class EntityBrowserController extends ControllerBase {
+       $response = (new AjaxResponse())->addCommand(new CloseDialogCommand('#' . $entity->getEntityTypeId() . '-' . $entity->id() . '-edit-dialog'));
+       // Also refresh the widget if "details_id" is provided.
+       $details_id = $request->query->get('details_id');
++      $show_messages = $request->query->get('show_messages');
+       if (!empty($details_id)) {
+         $response->addCommand(new ValueUpdatedCommand($details_id));
+-
+-        if (empty($operation)) {
+-          $response->addCommand(new AlertCommand($this->t("An edit form couldn't be found.")));
++        $messages = [
++          '#type' => 'status_messages',
++          '#weight' => -10000,
++          '#access' => (bool) $this->messenger()->all(),
++        ];
++        if (!empty($show_messages) && $this->messenger()->all()) {
++          $response->addCommand(new OpenDialogCommand('#eb-messages-modal', $this->t('Messages'), $messages, ['modal' => TRUE, 'width' => '50%']));
+         }
+       }
+ 
+diff --git a/src/Plugin/Field/FieldWidget/EntityReferenceBrowserWidget.php b/src/Plugin/Field/FieldWidget/EntityReferenceBrowserWidget.php
+index 13df19e..fd05d5b 100644
+--- a/src/Plugin/Field/FieldWidget/EntityReferenceBrowserWidget.php
++++ b/src/Plugin/Field/FieldWidget/EntityReferenceBrowserWidget.php
+@@ -13,9 +13,12 @@ use Drupal\Core\Url;
+ use Drupal\Core\Validation\Plugin\Validation\Constraint\NotNullConstraint;
+ use Drupal\entity_browser\Element\EntityBrowserElement;
+ use Drupal\entity_browser\Entity\EntityBrowser;
++use Drupal\entity_browser\FieldWidgetDisplayManager;
++use Drupal\entity_browser\Plugin\EntityBrowser\FieldWidgetDisplay\RenderedEntity;
+ use Symfony\Component\DependencyInjection\ContainerInterface;
+ use Symfony\Component\Validator\ConstraintViolation;
+ use Symfony\Component\Validator\ConstraintViolationInterface;
++use Symfony\Component\Validator\ConstraintViolationList;
+ use Symfony\Component\Validator\ConstraintViolationListInterface;
+ 
+ /**
+@@ -100,10 +103,12 @@ class EntityReferenceBrowserWidget extends WidgetBase {
+       'open' => FALSE,
+       'field_widget_display' => 'label',
+       'field_widget_edit' => TRUE,
++      'field_widget_edit_form_mode' => 'default',
+       'field_widget_remove' => TRUE,
+       'field_widget_replace' => FALSE,
+       'field_widget_display_settings' => [],
+       'selection_mode' => EntityBrowserElement::SELECTION_MODE_APPEND,
++      'show_messages' => FALSE,
+     ] + parent::defaultSettings();
+   }
+ 
+@@ -126,8 +131,9 @@ class EntityReferenceBrowserWidget extends WidgetBase {
+       '#options' => $browsers,
+     ];
+ 
+-    $target_type = $this->fieldDefinition->getFieldStorageDefinition()->getSetting('target_type');
++    $target_type = $this->getFieldSetting('target_type');
+     $entity_type = $this->entityTypeManager->getStorage($target_type)->getEntityType();
++    $field_name = $this->fieldDefinition->getName();
+ 
+     $displays = [];
+     foreach ($this->fieldDisplayManager->getDefinitions() as $id => $definition) {
+@@ -136,7 +142,7 @@ class EntityReferenceBrowserWidget extends WidgetBase {
+       }
+     }
+ 
+-    $id = Html::getId($this->fieldDefinition->getName()) . '-field-widget-display-settings-ajax-wrapper-' . md5($this->fieldDefinition->getUniqueIdentifier());
++    $id = Html::getId($field_name) . '-field-widget-display-settings-ajax-wrapper-' . md5($this->fieldDefinition->getUniqueIdentifier());
+     $element['field_widget_display'] = [
+       '#title' => $this->t('Entity display plugin'),
+       '#type' => 'radios',
+@@ -164,7 +170,7 @@ class EntityReferenceBrowserWidget extends WidgetBase {
+           $form_state->getValue(
+             [
+               'fields',
+-              $this->fieldDefinition->getName(),
++              $field_name,
+               'settings_edit_form',
+               'settings',
+               'field_widget_display',
+@@ -174,30 +180,35 @@ class EntityReferenceBrowserWidget extends WidgetBase {
+           $form_state->getValue(
+             [
+               'fields',
+-              $this->fieldDefinition->getName(),
++              $field_name,
+               'settings_edit_form',
+               'settings',
+               'field_widget_display_settings',
+             ],
+             $this->getSetting('field_widget_display_settings')
+           ) + [
+-            'entity_type' => $this->fieldDefinition->getFieldStorageDefinition()->getSetting('target_type'),
++            'entity_type' => $target_type,
+           ]
+         )
+         ->settingsForm($form, $form_state);
+     }
+ 
+-    $edit_button_access = TRUE;
+-    if ($entity_type->id() == 'file') {
+-      // For entities of type "file", it only makes sense to have the edit
+-      // button if the module "file_entity" is present.
+-      $edit_button_access = $this->moduleHandler->moduleExists('file_entity');
+-    }
+     $element['field_widget_edit'] = [
+       '#title' => $this->t('Display Edit button'),
+       '#type' => 'checkbox',
+       '#default_value' => $this->getSetting('field_widget_edit'),
+-      '#access' => $edit_button_access,
++      '#access' => $this->canUseEditButton($target_type),
++    ];
++    $element['field_widget_edit_form_mode'] = [
++      '#type' => 'select',
++      '#title' => $this->t('Edit Form Mode'),
++      '#options' => $this->entityDisplayRepository->getFormModeOptions($target_type),
++      '#default_value' => $this->getSetting('field_widget_edit_form_mode'),
++      '#states' => [
++        'visible' => [
++          ':input[name="fields[' . $field_name . '][settings_edit_form][settings][field_widget_edit]"]' => ['checked' => TRUE],
++        ],
++      ],
+     ];
+ 
+     $element['field_widget_remove'] = [
+@@ -228,6 +239,12 @@ class EntityReferenceBrowserWidget extends WidgetBase {
+       '#default_value' => $this->getSetting('selection_mode'),
+     ];
+ 
++    $element['show_messages'] = [
++      '#title' => $this->t('Show messages after auto closing entity browser.'),
++      '#type' => 'checkbox',
++      '#default_value' => $this->getSetting('show_messages'),
++    ];
++
+     $element['#element_validate'] = [[static::class, 'validateSettingsForm']];
+ 
+     return $element;
+@@ -270,20 +287,30 @@ class EntityReferenceBrowserWidget extends WidgetBase {
+   public function settingsSummary() {
+     $summary = $this->summaryBase();
+     $field_widget_display = $this->getSetting('field_widget_display');
++    $target_type = $this->getFieldSetting('target_type');
+ 
+     if (!empty($field_widget_display)) {
+       $pluginDefinition = $this->fieldDisplayManager->getDefinition($field_widget_display);
+       $field_widget_display_settings = $this->getSetting('field_widget_display_settings');
+       $field_widget_display_settings += [
+-        'entity_type' => $this->fieldDefinition->getFieldStorageDefinition()->getSetting('target_type'),
++        'entity_type' => $target_type,
+       ];
++      /** @var \Drupal\Core\Entity\Display\EntityDisplayInterface $plugin */
+       $plugin = $this->fieldDisplayManager->createInstance($field_widget_display, $field_widget_display_settings);
+       $summary[] = $this->t('Entity display: @name', ['@name' => $pluginDefinition['label']]);
+-      if ($field_widget_display == 'rendered_entity') {
++      if ($plugin instanceof RenderedEntity) {
+         $view_mode_label = $plugin->getViewModeLabel();
+         $summary[] = $this->t('View Mode: @view_mode', ['@view_mode' => $view_mode_label]);
+       }
+     }
++    if ($this->getSetting('show_messages')) {
++      $summary[] = $this->t('Show messages');
++    }
++    if ($this->getSetting('field_widget_edit')) {
++      $edit_mode = $this->getSetting('field_widget_edit_form_mode');
++      $edit_mode_options = $this->entityDisplayRepository->getFormModeOptions($target_type);
++      $summary[] = $this->t('Edit Mode: @edit_mode', ['@edit_mode' => $edit_mode_options[$edit_mode] ?? $edit_mode]);
++    }
+     return $summary;
+   }
+ 
+@@ -530,11 +557,11 @@ class EntityReferenceBrowserWidget extends WidgetBase {
+    */
+   protected function displayCurrentSelection($details_id, array $field_parents, array $entities) {
+ 
+-    $target_entity_type = $this->fieldDefinition->getFieldStorageDefinition()->getSetting('target_type');
++    $target_entity_type = $this->getFieldSetting('target_type');
+ 
+     $field_widget_display = $this->fieldDisplayManager->createInstance(
+       $this->getSetting('field_widget_display'),
+-      $this->getSetting('field_widget_display_settings') + ['entity_type' => $this->fieldDefinition->getFieldStorageDefinition()->getSetting('target_type')]
++      $this->getSetting('field_widget_display_settings') + ['entity_type' => $target_entity_type]
+     );
+ 
+     $classes = [
+@@ -556,13 +583,7 @@ class EntityReferenceBrowserWidget extends WidgetBase {
+       'items' => array_map(
+         function (ContentEntityInterface $entity, $row_id) use ($field_widget_display, $details_id, $field_parents, $replace_button_access) {
+           $display = $field_widget_display->view($entity);
+-          $edit_button_access = $this->getSetting('field_widget_edit') && $entity->access('update', $this->currentUser);
+-          if ($entity->getEntityTypeId() == 'file') {
+-            // On file entities, the "edit" button shouldn't be visible unless
+-            // the module "file_entity" is present, which will allow them to be
+-            // edited on their own form.
+-            $edit_button_access &= $this->moduleHandler->moduleExists('file_entity');
+-          }
++          $edit_button_access = $this->getSetting('field_widget_edit') && $this->canUseEditButton($entity->getEntityTypeId()) && $entity->access('update', $this->currentUser);
+           if (is_string($display)) {
+             $display = ['#markup' => $display];
+           }
+@@ -612,16 +633,19 @@ class EntityReferenceBrowserWidget extends WidgetBase {
+               '#type' => 'submit',
+               '#value' => $this->t('Edit'),
+               '#name' => $this->fieldDefinition->getName() . '_edit_button_' . $entity->id() . '_' . $row_id . '_' . md5(json_encode($field_parents)),
++              '#limit_validation_errors' => [array_merge($field_parents, [$this->fieldDefinition->getName()])],
+               '#ajax' => [
+                 'url' => Url::fromRoute(
+                   'entity_browser.edit_form', [
+                     'entity_type' => $entity->getEntityTypeId(),
+                     'entity' => $entity->id(),
++                    'form_mode' => $this->getSetting('field_widget_edit_form_mode'),
+                   ]
+                 ),
+                 'options' => [
+                   'query' => [
+                     'details_id' => $details_id,
++                    'show_messages' => $this->getSetting('show_messages'),
+                   ],
+                 ],
+               ],
+@@ -755,7 +779,7 @@ class EntityReferenceBrowserWidget extends WidgetBase {
+    */
+   protected function formElementEntities(FieldItemListInterface $items, array $element, FormStateInterface $form_state) {
+     $entities = [];
+-    $entity_type = $this->fieldDefinition->getFieldStorageDefinition()->getSetting('target_type');
++    $entity_type = $this->getFieldSetting('target_type');
+     $entity_storage = $this->entityTypeManager->getStorage($entity_type);
+ 
+     // Find IDs from target_id element (it stores selected entities in form).
+@@ -888,4 +912,20 @@ class EntityReferenceBrowserWidget extends WidgetBase {
+     return FALSE;
+   }
+ 
++  /**
++   * Checks if an edit button can be used for an entity type.
++   *
++   * This requires the entity type definition to have a 'default' form class.
++   * Most entity types in core do have this, but file entities will not have
++   * it without the file_entity module being installed.
++   *
++   * @param string $entity_type_id
++   *   The entity type ID.
++   *
++   * @return bool
++   *   TRUE if an edit button can be used or FALSE otherwise.
++   */
++  protected function canUseEditButton($entity_type_id) {
++    return (bool) $this->entityTypeManager->getDefinition($entity_type_id)->getFormClass('default');
++  }
+ }
+diff --git a/tests/modules/entity_browser_ief_test/config/install/core.entity_form_display.media.ief_media_type.default.yml b/tests/modules/entity_browser_ief_test/config/install/core.entity_form_display.media.ief_media_type.default.yml
+index a89f545..267609d 100644
+--- a/tests/modules/entity_browser_ief_test/config/install/core.entity_form_display.media.ief_media_type.default.yml
++++ b/tests/modules/entity_browser_ief_test/config/install/core.entity_form_display.media.ief_media_type.default.yml
+@@ -17,6 +17,7 @@ content:
+       entity_browser: ief_entity_browser_file
+       field_widget_display: label
+       field_widget_edit: true
++      field_widget_edit_form_mode: default
+       field_widget_remove: true
+       field_widget_replace: false
+       open: true
+diff --git a/tests/modules/entity_browser_test_entityqueue/config/install/core.entity_form_display.entity_subqueue.nodes.default.yml b/tests/modules/entity_browser_test_entityqueue/config/install/core.entity_form_display.entity_subqueue.nodes.default.yml
+index e9c75d6..0ee64ff 100644
+--- a/tests/modules/entity_browser_test_entityqueue/config/install/core.entity_form_display.entity_subqueue.nodes.default.yml
++++ b/tests/modules/entity_browser_test_entityqueue/config/install/core.entity_form_display.entity_subqueue.nodes.default.yml
+@@ -20,6 +20,7 @@ content:
+       entity_browser: widget_context_default_value
+       field_widget_display: label
+       field_widget_edit: true
++      field_widget_edit_form_mode: default
+       field_widget_remove: true
+       selection_mode: selection_append
+       field_widget_replace: false
+diff --git a/tests/modules/entity_browser_test_paragraphs/config/install/core.entity_form_display.paragraph.content_embed.default.yml b/tests/modules/entity_browser_test_paragraphs/config/install/core.entity_form_display.paragraph.content_embed.default.yml
+index d09edbb..00d56b7 100644
+--- a/tests/modules/entity_browser_test_paragraphs/config/install/core.entity_form_display.paragraph.content_embed.default.yml
++++ b/tests/modules/entity_browser_test_paragraphs/config/install/core.entity_form_display.paragraph.content_embed.default.yml
+@@ -19,6 +19,7 @@ content:
+       entity_browser: test_nodes
+       field_widget_display: label
+       field_widget_edit: true
++      field_widget_edit_form_mode: default
+       field_widget_remove: true
+       field_widget_replace: false
+       selection_mode: selection_append
+diff --git a/tests/modules/entity_browser_test_paragraphs/config/install/core.entity_form_display.paragraph.nested_paragraph.default.yml b/tests/modules/entity_browser_test_paragraphs/config/install/core.entity_form_display.paragraph.nested_paragraph.default.yml
+index 2a817a9..f4cab07 100644
+--- a/tests/modules/entity_browser_test_paragraphs/config/install/core.entity_form_display.paragraph.nested_paragraph.default.yml
++++ b/tests/modules/entity_browser_test_paragraphs/config/install/core.entity_form_display.paragraph.nested_paragraph.default.yml
+@@ -18,6 +18,7 @@ content:
+       entity_browser: test_nodes
+       field_widget_display: label
+       field_widget_edit: true
++      field_widget_edit_form_mode: default
+       field_widget_remove: true
+       field_widget_replace: false
+       selection_mode: selection_append
+diff --git a/tests/src/FunctionalJavascript/EntityBrowserTest.php b/tests/src/FunctionalJavascript/EntityBrowserTest.php
+index f2bc387..e8ec708 100644
+--- a/tests/src/FunctionalJavascript/EntityBrowserTest.php
++++ b/tests/src/FunctionalJavascript/EntityBrowserTest.php
+@@ -38,10 +38,9 @@ class EntityBrowserTest extends EntityBrowserWebDriverTestBase {
+     // Switch back to the main page.
+     $this->getSession()->switchToIFrame();
+     $this->waitForAjaxToFinish();
+-    // Test the Edit functionality.
+     $this->assertSession()->pageTextContains('llama.jpg');
+-    $this->assertSession()->buttonExists('Edit');
+-    // @TODO Test the edit button.
++    // Files have no form mode by default, so no Edit button is visible.
++    $this->assertSession()->buttonNotExists('Edit');
+     // Test the Delete functionality.
+     $this->assertSession()->buttonExists('Remove');
+     $this->getSession()->getPage()->pressButton('Remove');
