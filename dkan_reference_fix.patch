@@ -1,0 +1,35 @@
+diff --git a/modules/metastore/src/Reference/HelperTrait.php b/modules/metastore/src/Reference/HelperTrait.php
+index 9a6039bc0..b2aa98c7d 100644
+--- a/modules/metastore/src/Reference/HelperTrait.php
++++ b/modules/metastore/src/Reference/HelperTrait.php
+@@ -31,7 +31,7 @@ trait HelperTrait {
+    *
+    * @todo consolidate with common RouteProvider's getPropertyList.
+    */
+-  private function getPropertyList() : array {
++  protected function getPropertyList() : array {
+     if (isset($this->configService)) {
+       $list = $this->configService->get('metastore.settings')->get('property_list');
+       return array_values(array_filter($list));
+diff --git a/modules/metastore/src/Reference/Referencer.php b/modules/metastore/src/Reference/Referencer.php
+index 3f98db1c9..cf6e85514 100644
+--- a/modules/metastore/src/Reference/Referencer.php
++++ b/modules/metastore/src/Reference/Referencer.php
+@@ -131,7 +131,7 @@ class Referencer {
+    * @return string|array
+    *   Single reference, or an array of references.
+    */
+-  private function referenceProperty(string $property_id, mixed $data) {
++  protected function referenceProperty(string $property_id, mixed $data) {
+     if (is_array($data)) {
+       return $this->referenceMultiple($property_id, $data);
+     }
+@@ -174,7 +174,7 @@ class Referencer {
+    * @return string|null
+    *   The Uuid reference, or NULL on failure.
+    */
+-  private function referenceSingle(string $property_id, $value) {
++  protected function referenceSingle(string $property_id, $value) {
+     if ($property_id == 'distribution') {
+       $value = $this->distributionHandling($value);
+     }
